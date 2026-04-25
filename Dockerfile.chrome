@@ -1,3 +1,5 @@
 FROM lscr.io/linuxserver/chromium:latest
 
 COPY root/ /
+
+EXPOSE 9222
