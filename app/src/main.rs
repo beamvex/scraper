@@ -3,6 +3,7 @@ use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
 use std::path::PathBuf;
+use std::collections::HashSet;
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -122,11 +123,18 @@ async fn main() -> Result<()> {
             .evaluate(
                 r#"(() => {
   const urls = new Set();
+  const normalize = (u) => {
+    if (!u) return u;
+    if (typeof u !== 'string') return u;
+    // Try to strip Amazon sizing segments like: _AC_SX679_ or _SS40_
+    // Keep extension.
+    return u.replace(/\._[A-Z0-9,]+_\./, '.');
+  };
   const add = (u) => {
     if (!u) return;
     if (typeof u !== 'string') return;
     if (!u.startsWith('http')) return;
-    urls.add(u);
+    urls.add(normalize(u));
   };
 
   const landing = document.querySelector('#landingImage');
@@ -140,6 +148,16 @@ async fn main() -> Result<()> {
     } catch (e) {}
     add(landing.src);
   }
+
+  // Amazon product gallery thumbnails
+  document
+    .querySelectorAll('#altImages img')
+    .forEach((img) => {
+      add(img.getAttribute('data-old-hires'));
+      add(img.getAttribute('data-src'));
+      add(img.currentSrc);
+      add(img.src);
+    });
 
   document
     .querySelectorAll('img')
@@ -155,6 +173,12 @@ async fn main() -> Result<()> {
             )
             .await?
             .into_value::<Vec<String>>()?;
+
+        let mut seen = HashSet::new();
+        let image_urls: Vec<String> = image_urls
+            .into_iter()
+            .filter(|u| seen.insert(u.clone()))
+            .collect();
 
         info!(count = image_urls.len(), "extracted image urls");
 
