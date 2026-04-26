@@ -766,6 +766,7 @@ dependencies = [
  "anyhow",
  "chromiumoxide",
  "futures",
+ "rand",
  "tokio",
 ]
 
