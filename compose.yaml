@@ -13,6 +13,7 @@ services:
     volumes:
       - /path/to/chromium/config:/config
       - ${PWD}/app:/app
+      - ${PWD}/data:/data
     ports:
       - 3000:3000
       - 3001:3001
