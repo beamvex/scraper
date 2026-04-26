@@ -1,13 +1,8 @@
-FROM debian:trixie AS rust
-
-RUN apt-get update && apt-get install -y curl
+FROM lscr.io/linuxserver/chromium:latest
 
 RUN curl https://sh.rustup.rs -o rustup.sh && sh rustup.sh -y
 
-
-FROM lscr.io/linuxserver/chromium:latest
-
-COPY --from=rust /root/.cargo /root/.cargo
+RUN cp -r /config/.cargo /root/.cargo
 
 COPY root/ /
 
