@@ -1,0 +1,7 @@
+#!/bin/bash
+
+export PATH="/opt/rust/bin:$PATH"
+
+
+
+wrapped-chromium ${CHROME_CLI}

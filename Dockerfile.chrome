@@ -1,9 +1,20 @@
 FROM lscr.io/linuxserver/chromium:latest
 
-RUN curl https://sh.rustup.rs -o rustup.sh && sh rustup.sh -y
+ENV RUSTUP_HOME=/opt/rust
+ENV CARGO_HOME=/opt/rust
 
-RUN cp -r /config/.cargo /root/.cargo
+RUN curl https://sh.rustup.rs -o rustup.sh && sh rustup.sh -y --no-modify-path
+
+
 
 COPY root/ /
+
+COPY src/ /app/src/
+COPY Cargo.toml /app/Cargo.toml
+COPY Cargo.lock /app/Cargo.lock
+
+WORKDIR /app
+
+
 
 EXPOSE 9222
