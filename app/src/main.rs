@@ -1,9 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
-use std::path::PathBuf;
+use serde_json::json;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -78,19 +79,14 @@ async fn main() -> Result<()> {
     let mut rng = rand::rng();
     let query = computer_queries.choose(&mut rng).unwrap();
     info!(%query, "selected search query");
-    let search_url = format!(
-        "https://www.amazon.com/s?k={}",
-        query.replace(' ', "+")
-    );
+    let search_url = format!("https://www.amazon.com/s?k={}", query.replace(' ', "+"));
     info!(%search_url, "opening search url");
 
     let page = browser.new_page(search_url).await?;
 
     tokio::time::sleep(std::time::Duration::from_millis(750)).await;
 
-    let mut results = page
-        .find_elements("a.a-link-normal.s-no-outline")
-        .await?;
+    let mut results = page.find_elements("a.a-link-normal.s-no-outline").await?;
 
     if results.is_empty() {
         warn!("primary selector returned 0 results, trying fallback selector");
@@ -111,6 +107,8 @@ async fn main() -> Result<()> {
         let product_folder_name = sanitize_path_component(&product_name);
         let product_dir: PathBuf = ["/data", &product_folder_name].iter().collect();
 
+        let openai_api_key = load_chatgpt_key().await?;
+
         tokio::fs::create_dir_all(&product_dir).await?;
         info!(dir = %product_dir.display(), name = %product_name, "created product directory");
 
@@ -118,6 +116,29 @@ async fn main() -> Result<()> {
         let html_path = product_dir.join("page.html");
         tokio::fs::write(&html_path, html).await?;
         info!(path = %html_path.display(), "saved page html");
+
+        let product_url = page.url().await.ok().flatten();
+        match generate_review_article_html(
+            &openai_api_key,
+            &product_name,
+            product_url.as_deref(),
+            &tokio::fs::read_to_string(&html_path)
+                .await
+                .unwrap_or_default(),
+        )
+        .await
+        {
+            Ok(review_html) => {
+                let reviews_dir: PathBuf = ["/data", "reviews"].iter().collect();
+                tokio::fs::create_dir_all(&reviews_dir).await?;
+                let review_path = reviews_dir.join(format!("{}.html", product_folder_name));
+                tokio::fs::write(&review_path, review_html).await?;
+                info!(path = %review_path.display(), "saved review article");
+            }
+            Err(err) => {
+                warn!(error = %err, "failed to generate review article");
+            }
+        }
 
         let image_urls: Vec<String> = page
             .evaluate(
@@ -239,5 +260,89 @@ fn sanitize_path_component(input: &str) -> String {
         "unknown-product".to_string()
     } else {
         out.chars().take(120).collect()
+    }
+}
+
+async fn load_chatgpt_key() -> Result<String> {
+    let home = std::env::var("HOME").context("HOME env var not set")?;
+    let key_path: PathBuf = [home.as_str(), ".chatgptkey"].iter().collect();
+    let key = tokio::fs::read_to_string(&key_path)
+        .await
+        .with_context(|| format!("failed to read key file at {}", key_path.display()))?;
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        bail!("chatgpt key file is empty: {}", key_path.display());
+    }
+    Ok(key)
+}
+
+async fn generate_review_article_html(
+    api_key: &str,
+    product_title: &str,
+    product_url: Option<&str>,
+    product_page_html: &str,
+) -> Result<String> {
+    let mut html = product_page_html;
+    const MAX_CHARS: usize = 120_000;
+    if html.len() > MAX_CHARS {
+        html = &html[..MAX_CHARS];
+    }
+
+    let url_line = product_url
+        .map(|u| format!("Product URL: {}\n", u))
+        .unwrap_or_default();
+
+    let prompt = format!(
+        "You are an expert consumer tech reviewer. Write a review article that is about a 4-minute read.\n\n\
+Output requirements:\n\
+- Output valid HTML only (no Markdown).\n\
+- Use <article> with a single <h1>, then sections with <h2>.\n\
+- Include: overview, key features, who it's for, pros/cons lists, pricing/value discussion, and verdict.\n\
+- Do not mention that you were given raw HTML; infer details from the provided page.\n\
+- If specs are unclear, state assumptions cautiously.\n\n\
+Title: {}\n\
+{}\n\
+Product detail page HTML (truncated if needed):\n{}",
+        product_title, url_line, html
+    );
+
+    let body = json!({
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("failed to call OpenAI chat completions")?;
+
+    let status = resp.status();
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .context("failed to parse OpenAI response JSON")?;
+
+    if !status.is_success() {
+        bail!("OpenAI request failed ({}): {}", status, v);
+    }
+
+    let content = v
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c0| c0.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.trim().to_string());
+
+    match content {
+        Some(c) if !c.is_empty() => Ok(c),
+        _ => bail!("OpenAI response did not contain choices[0].message.content"),
     }
 }
