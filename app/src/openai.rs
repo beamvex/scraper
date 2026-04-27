@@ -38,13 +38,14 @@ Output requirements:\n\
 - Use <article> with a single <h1>, then sections with <h2>.\n\
 - Include: overview, key features, who it's for, pros/cons lists, pricing/value discussion, and verdict.\n\
 - Do not mention that you were given raw HTML; infer details from the provided page.\n\
+- Write at least 5 sections with h2 headers\n\
+- each section should have at least 3 paragraphs \n\
+- each paragraph should be 3-5 sentences\n\
 - If specs are unclear, state assumptions cautiously.\n\n\
 Title: {}\n\
 {}\n\
 Product detail page HTML (truncated if needed):\n{}",
-        product_title,
-        url_line,
-        html
+        product_title, url_line, html
     );
 
     let body = json!({
