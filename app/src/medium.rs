@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 use chromiumoxide::browser::Browser;
+use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
+use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
 use chromiumoxide::page::Page;
 use tracing::{info, warn};
 
@@ -10,20 +12,16 @@ pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str
         .await
         .context("failed to open medium new story page")?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
     ensure_logged_in(&page).await?;
 
     let payload_title = js_escape_for_template_literal(title);
-    let payload_body = js_escape_for_template_literal(body_text);
 
     let res: serde_json::Value = page
         .evaluate(format!(
             r#"(() => {{
   const title = `{payload_title}`;
-  const body = `{payload_body}`;
-
-  const isEditable = (el) => !!el && el.getAttribute && el.getAttribute('contenteditable') === 'true';
 
   const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
   if (!editables.length) {{
@@ -33,14 +31,9 @@ pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str
   const titleEl = editables.find((el) => el.tagName === 'H1') || editables[0];
   titleEl.focus();
   document.execCommand('selectAll', false, null);
-  document.execCommand('insertText', false, title);
+  document.execCommand('delete', false, null);
 
-  const bodyEl = editables.reverse().find((el) => el.tagName !== 'H1') || titleEl;
-  bodyEl.focus();
-  document.execCommand('insertText', false, '\n');
-  document.execCommand('insertText', false, body);
-
-  return {{ ok: true, editables: editables.length }};
+  return {{ ok: true, editables: editables.length, activeTag: (document.activeElement && document.activeElement.tagName) || null, readyForTyping: true }};
 }})()"#
         ))
         .await?
@@ -52,7 +45,61 @@ pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str
 
     info!(details = %res, "populated Medium editor");
 
+    // Simulate typing: title, Enter, then body.
+    type_text_like_user(&page, title).await?;
+    press_enter(&page).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    type_text_like_user(&page, body_text).await?;
+
     open_publish_flow(&page).await;
+
+    Ok(())
+}
+
+async fn type_text_like_user(page: &Page, text: &str) -> Result<()> {
+    // Small delay to ensure focus is stable.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    const CHUNK_SIZE: usize = 40;
+    for chunk in text.as_bytes().chunks(CHUNK_SIZE) {
+        let s = String::from_utf8_lossy(chunk).to_string();
+        // CDP input insertText uses the currently focused element.
+        page.execute(InsertTextParams::from(s))
+            .await
+            .context("failed to insert text via CDP")?;
+        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+    }
+    Ok(())
+}
+
+async fn press_enter(page: &Page) -> Result<()> {
+    let key_down: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyDown)
+        .key("Enter")
+        .code("Enter")
+        .windows_virtual_key_code(13)
+        .native_virtual_key_code(13)
+        .text("\r")
+        .unmodified_text("\r")
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    page.execute(key_down)
+        .await
+        .context("failed to dispatch Enter keyDown")?;
+
+    let key_up: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyUp)
+        .key("Enter")
+        .code("Enter")
+        .windows_virtual_key_code(13)
+        .native_virtual_key_code(13)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    page.execute(key_up)
+        .await
+        .context("failed to dispatch Enter keyUp")?;
 
     Ok(())
 }
