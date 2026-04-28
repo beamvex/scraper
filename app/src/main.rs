@@ -10,9 +10,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::medium::create_medium_draft;
+use crate::medium::create_medium_draft_from_review_html;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
-use crate::util::{html_to_text_for_medium, sanitize_path_component};
+use crate::util::sanitize_path_component;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -142,11 +142,7 @@ async fn main() -> Result<()> {
                 tokio::fs::write(&review_path, review_html).await?;
                 info!(path = %review_path.display(), "saved review article");
 
-                let review_html = tokio::fs::read_to_string(&review_path)
-                    .await
-                    .unwrap_or_default();
-                let review_text = html_to_text_for_medium(&review_html);
-                match create_medium_draft(&browser, &product_name, &review_text).await {
+                match create_medium_draft_from_review_html(&browser, &review_path).await {
                     Ok(()) => {
                         info!(
                             "opened Medium and created draft (please review and complete publishing in browser)"

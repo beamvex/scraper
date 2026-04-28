@@ -4,7 +4,55 @@ use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
 use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
 use chromiumoxide::page::Page;
 use rand::Rng;
+use std::path::Path;
 use tracing::{info, warn};
+
+pub async fn create_medium_draft_from_review_html(
+    browser: &Browser,
+    review_html_path: &Path,
+) -> Result<()> {
+    let review_url = format!("file://{}", review_html_path.display());
+    info!(%review_url, "opening review html for copy source");
+
+    let review_page = browser
+        .new_page(review_url)
+        .await
+        .context("failed to open review html in new tab")?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    let (title, body_text) = extract_title_and_body_text(&review_page).await?;
+    info!(
+        title_len = title.len(),
+        body_len = body_text.len(),
+        "extracted review title/body"
+    );
+
+    info!("opening medium new story");
+    let medium_page = browser
+        .new_page("https://medium.com/new-story")
+        .await
+        .context("failed to open medium new story page")?;
+
+    let _ = medium_page.enable_stealth_mode().await;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    ensure_logged_in(&medium_page).await?;
+
+    focus_medium_title(&medium_page).await?;
+    copy_text_via_clipboard(&review_page, &title).await?;
+    paste_from_clipboard(&medium_page).await?;
+
+    press_enter(&medium_page).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    copy_text_via_clipboard(&review_page, &body_text).await?;
+    paste_from_clipboard(&medium_page).await?;
+
+    open_publish_flow(&medium_page).await;
+
+    let _ = review_page.close().await;
+    Ok(())
+}
 
 pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str) -> Result<()> {
     info!("opening medium new story");
@@ -55,6 +103,141 @@ pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str
     type_text_like_user(&page, body_text).await?;
 
     open_publish_flow(&page).await;
+
+    Ok(())
+}
+
+async fn extract_title_and_body_text(review_page: &Page) -> Result<(String, String)> {
+    let v: serde_json::Value = review_page
+        .evaluate(
+            r#"(() => {
+  const title = (document.querySelector('h1') && document.querySelector('h1').innerText) || document.title || '';
+  const article = document.querySelector('article');
+  const body = (article ? article.innerText : document.body.innerText) || '';
+  return { title, body };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let body = v
+        .get("body")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    Ok((title, body))
+}
+
+async fn focus_medium_title(medium_page: &Page) -> Result<()> {
+    let res: serde_json::Value = medium_page
+        .evaluate(
+            r#"(() => {
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  if (!editables.length) return { ok: false, error: 'no contenteditable elements found' };
+  const titleEl = editables.find((el) => el.tagName === 'H1') || editables[0];
+  titleEl.focus();
+  document.execCommand('selectAll', false, null);
+  document.execCommand('delete', false, null);
+  return { ok: true, tag: titleEl.tagName };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    if res.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        bail!("failed to focus Medium title: {}", res);
+    }
+    Ok(())
+}
+
+async fn copy_text_via_clipboard(source_page: &Page, text: &str) -> Result<()> {
+    let payload = js_escape_for_template_literal(text);
+    let res: serde_json::Value = source_page
+        .evaluate(format!(
+            r#"(() => {{
+  const text = `{payload}`;
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  return {{ ok }};
+}})()"#
+        ))
+        .await?
+        .into_value()?;
+
+    if res.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        bail!("copy failed (clipboard may be blocked): {}", res);
+    }
+    Ok(())
+}
+
+async fn paste_from_clipboard(target_page: &Page) -> Result<()> {
+    // Try to look like a real user: Ctrl+V.
+    send_ctrl_combo(target_page, "v", 86).await
+}
+
+async fn send_ctrl_combo(page: &Page, key: &str, vk: i64) -> Result<()> {
+    // Ctrl keydown
+    let ctrl_down: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyDown)
+        .key("Control")
+        .code("ControlLeft")
+        .windows_virtual_key_code(17)
+        .native_virtual_key_code(17)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(ctrl_down)
+        .await
+        .context("failed ctrl keyDown")?;
+
+    // keydown for letter with Ctrl modifier (modifiers bitfield: Ctrl=2)
+    let k_down: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyDown)
+        .modifiers(2)
+        .key(key)
+        .code(format!("Key{}", key.to_ascii_uppercase()))
+        .windows_virtual_key_code(vk)
+        .native_virtual_key_code(vk)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(k_down).await.context("failed combo keyDown")?;
+
+    let k_up: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyUp)
+        .modifiers(2)
+        .key(key)
+        .code(format!("Key{}", key.to_ascii_uppercase()))
+        .windows_virtual_key_code(vk)
+        .native_virtual_key_code(vk)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(k_up).await.context("failed combo keyUp")?;
+
+    // Ctrl keyup
+    let ctrl_up: DispatchKeyEventParams = DispatchKeyEventParams::builder()
+        .r#type(DispatchKeyEventType::KeyUp)
+        .key("Control")
+        .code("ControlLeft")
+        .windows_virtual_key_code(17)
+        .native_virtual_key_code(17)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(ctrl_up).await.context("failed ctrl keyUp")?;
 
     Ok(())
 }
