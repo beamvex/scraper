@@ -17,6 +17,10 @@ use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Ok(home) = std::env::var("HOME") {
+        let _ = dotenvy::from_filename(format!("{}/.env", home));
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
