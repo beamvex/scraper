@@ -2,6 +2,9 @@ use anyhow::{Context, Result, bail};
 use chromiumoxide::browser::Browser;
 use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
 use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
+use chromiumoxide::cdp::browser_protocol::input::{
+    DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
+};
 use chromiumoxide::page::Page;
 use rand::Rng;
 use std::path::Path;
@@ -39,11 +42,18 @@ pub async fn create_medium_draft_from_review_html(
     ensure_logged_in(&medium_page).await?;
 
     focus_medium_title(&medium_page).await?;
-    copy_text_via_clipboard(&review_page, &title).await?;
-    paste_from_clipboard(&medium_page).await?;
+    if let Ok((x, y)) = get_medium_title_point(&medium_page).await {
+        mouse_move_and_click(&medium_page, x, y).await?;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+    type_text_like_user(&medium_page, &title).await?;
 
     press_enter(&medium_page).await?;
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    if let Ok((x, y)) = get_medium_body_point(&medium_page).await {
+        mouse_move_and_click(&medium_page, x, y).await?;
+    }
 
     copy_text_via_clipboard(&review_page, &body_text).await?;
     paste_from_clipboard(&medium_page).await?;
@@ -51,6 +61,102 @@ pub async fn create_medium_draft_from_review_html(
     open_publish_flow(&medium_page).await;
 
     let _ = review_page.close().await;
+    Ok(())
+}
+
+async fn get_medium_title_point(page: &Page) -> Result<(f64, f64)> {
+    let v: serde_json::Value = page
+        .evaluate(
+            r#"(() => {
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  const titleEl = editables.find((el) => el.tagName === 'H1') || editables[0];
+  if (!titleEl) return { ok: false };
+  const r = titleEl.getBoundingClientRect();
+  return { ok: true, x: r.left + r.width * 0.5, y: r.top + r.height * 0.5 };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    if v.get("ok").and_then(|b| b.as_bool()) != Some(true) {
+        bail!("could not locate Medium title rect");
+    }
+    let x = v.get("x").and_then(|n| n.as_f64()).context("missing x")?;
+    let y = v.get("y").and_then(|n| n.as_f64()).context("missing y")?;
+    Ok((x, y))
+}
+
+async fn get_medium_body_point(page: &Page) -> Result<(f64, f64)> {
+    let v: serde_json::Value = page
+        .evaluate(
+            r#"(() => {
+  const editables = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+  // Find a non-H1 editable for body.
+  const bodyEl = editables.find((el) => el.tagName !== 'H1') || editables[editables.length - 1];
+  if (!bodyEl) return { ok: false };
+  const r = bodyEl.getBoundingClientRect();
+  return { ok: true, x: r.left + Math.min(r.width * 0.25, 80), y: r.top + Math.min(r.height * 0.6, 120) };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    if v.get("ok").and_then(|b| b.as_bool()) != Some(true) {
+        bail!("could not locate Medium body rect");
+    }
+    let x = v.get("x").and_then(|n| n.as_f64()).context("missing x")?;
+    let y = v.get("y").and_then(|n| n.as_f64()).context("missing y")?;
+    Ok((x, y))
+}
+
+async fn mouse_move_and_click(page: &Page, x: f64, y: f64) -> Result<()> {
+    let mut rng = rand::rng();
+
+    // Start somewhere near the target with some jitter.
+    let mut cx = x + rng.random_range(-120.0..=120.0);
+    let mut cy = y + rng.random_range(-80.0..=80.0);
+
+    let steps = rng.random_range(6..=14);
+    for i in 0..steps {
+        let t = (i + 1) as f64 / steps as f64;
+        let nx = cx + (x - cx) * t + rng.random_range(-2.5..=2.5);
+        let ny = cy + (y - cy) * t + rng.random_range(-2.0..=2.0);
+        let mv: DispatchMouseEventParams = DispatchMouseEventParams::builder()
+            .r#type(DispatchMouseEventType::MouseMoved)
+            .x(nx)
+            .y(ny)
+            .build()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        page.execute(mv).await.context("failed mouse move")?;
+        tokio::time::sleep(std::time::Duration::from_millis(rng.random_range(8..=24))).await;
+        cx = nx;
+        cy = ny;
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(rng.random_range(40..=120))).await;
+
+    let down: DispatchMouseEventParams = DispatchMouseEventParams::builder()
+        .r#type(DispatchMouseEventType::MousePressed)
+        .x(x)
+        .y(y)
+        .button(MouseButton::Left)
+        .click_count(1)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(down).await.context("failed mouse down")?;
+
+    tokio::time::sleep(std::time::Duration::from_millis(rng.random_range(30..=90))).await;
+
+    let up: DispatchMouseEventParams = DispatchMouseEventParams::builder()
+        .r#type(DispatchMouseEventType::MouseReleased)
+        .x(x)
+        .y(y)
+        .button(MouseButton::Left)
+        .click_count(1)
+        .build()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    page.execute(up).await.context("failed mouse up")?;
+
     Ok(())
 }
 
