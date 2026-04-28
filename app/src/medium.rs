@@ -31,17 +31,21 @@ pub async fn create_medium_draft_from_review_html(
         "extracted review title/body"
     );
 
-    info!("opening medium new story");
+    info!("opening medium home");
     let medium_page = browser
-        .new_page("https://medium.com/new-story")
+        .new_page("https://medium.com/")
         .await
-        .context("failed to open medium new story page")?;
+        .context("failed to open medium home page")?;
 
     let _ = medium_page.enable_stealth_mode().await;
     tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-    ensure_logged_in(&medium_page).await?;
+    ensure_logged_in_home(&medium_page).await?;
 
     open_devtools(&medium_page).await?;
+
+    click_medium_write(&medium_page).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    ensure_logged_in(&medium_page).await?;
 
     focus_medium_title(&medium_page).await?;
     if let Ok((x, y)) = get_medium_title_point(&medium_page).await {
@@ -63,6 +67,72 @@ pub async fn create_medium_draft_from_review_html(
     open_publish_flow(&medium_page).await;
 
     let _ = review_page.close().await;
+    Ok(())
+}
+
+async fn ensure_logged_in_home(page: &Page) -> Result<()> {
+    let res: serde_json::Value = page
+        .evaluate(
+            r#"(() => {
+  const text = document.body ? document.body.innerText || '' : '';
+  const hasSignIn = /sign in|log in/i.test(text);
+  const hasWrite = Array.from(document.querySelectorAll('a,button')).some((el) => {
+    const t = (el.innerText || '').trim().toLowerCase();
+    const href = (el.getAttribute && el.getAttribute('href')) || '';
+    return t === 'write' || /\/new-story/.test(href);
+  });
+  return { hasSignIn, hasWrite, url: location.href };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    let has_sign_in = res
+        .get("hasSignIn")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let has_write = res
+        .get("hasWrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if has_sign_in {
+        bail!(
+            "Medium appears logged out on home page; please log in in the Chrome instance connected on :9222 (details: {})",
+            res
+        );
+    }
+    if !has_write {
+        warn!("could not confirm presence of 'Write' button on Medium home; continuing");
+    }
+    Ok(())
+}
+
+async fn click_medium_write(page: &Page) -> Result<()> {
+    let v: serde_json::Value = page
+        .evaluate(
+            r#"(() => {
+  const els = Array.from(document.querySelectorAll('a,button'));
+  const el = els.find((e) => {
+    const t = (e.innerText || '').trim().toLowerCase();
+    const href = (e.getAttribute && e.getAttribute('href')) || '';
+    return t === 'write' || /\/new-story/.test(href);
+  });
+  if (!el) return { ok: false };
+  const r = el.getBoundingClientRect();
+  return { ok: true, x: r.left + r.width * 0.5, y: r.top + r.height * 0.5 };
+})()"#,
+        )
+        .await?
+        .into_value()?;
+
+    if v.get("ok").and_then(|b| b.as_bool()) != Some(true) {
+        bail!("could not locate Medium 'Write' button");
+    }
+
+    let x = v.get("x").and_then(|n| n.as_f64()).context("missing x")?;
+    let y = v.get("y").and_then(|n| n.as_f64()).context("missing y")?;
+    mouse_move_and_click(page, x, y).await?;
     Ok(())
 }
 
