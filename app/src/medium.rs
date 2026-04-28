@@ -3,6 +3,7 @@ use chromiumoxide::browser::Browser;
 use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
 use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
 use chromiumoxide::page::Page;
+use rand::Rng;
 use tracing::{info, warn};
 
 pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str) -> Result<()> {
@@ -11,6 +12,8 @@ pub async fn create_medium_draft(browser: &Browser, title: &str, body_text: &str
         .new_page("https://medium.com/new-story")
         .await
         .context("failed to open medium new story page")?;
+
+    let _ = page.enable_stealth_mode().await;
 
     tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
@@ -60,14 +63,30 @@ async fn type_text_like_user(page: &Page, text: &str) -> Result<()> {
     // Small delay to ensure focus is stable.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
-    const CHUNK_SIZE: usize = 40;
-    for chunk in text.as_bytes().chunks(CHUNK_SIZE) {
-        let s = String::from_utf8_lossy(chunk).to_string();
+    let mut rng = rand::rng();
+    let bytes = text.as_bytes();
+    let mut idx = 0usize;
+    let mut burst = 0usize;
+    while idx < bytes.len() {
+        let chunk_size = rng.random_range(10..=55);
+        let end = (idx + chunk_size).min(bytes.len());
+        let s = String::from_utf8_lossy(&bytes[idx..end]).to_string();
         // CDP input insertText uses the currently focused element.
         page.execute(InsertTextParams::from(s))
             .await
             .context("failed to insert text via CDP")?;
-        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+
+        burst += 1;
+        if burst % rng.random_range(18..=35) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                rng.random_range(400..=1200),
+            ))
+            .await;
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(rng.random_range(35..=160))).await;
+        }
+
+        idx = end;
     }
     Ok(())
 }
