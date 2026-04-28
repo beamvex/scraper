@@ -1,6 +1,7 @@
 mod medium;
 mod openai;
 mod util;
+mod wordpress_com;
 
 use anyhow::Result;
 use chromiumoxide::browser::Browser;
@@ -10,9 +11,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::medium::create_medium_draft_from_review_html;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::util::sanitize_path_component;
+use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -142,14 +143,12 @@ async fn main() -> Result<()> {
                 tokio::fs::write(&review_path, review_html).await?;
                 info!(path = %review_path.display(), "saved review article");
 
-                match create_medium_draft_from_review_html(&browser, &review_path).await {
+                match publish_review_html_to_wordpress_com(&review_path).await {
                     Ok(()) => {
-                        info!(
-                            "opened Medium and created draft (please review and complete publishing in browser)"
-                        );
+                        info!("created WordPress.com post");
                     }
                     Err(err) => {
-                        warn!(error = %err, "failed to create Medium draft");
+                        warn!(error = %err, "failed to create WordPress.com post");
                     }
                 }
             }
