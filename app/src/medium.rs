@@ -7,7 +7,9 @@ use chromiumoxide::cdp::browser_protocol::input::{
 };
 use chromiumoxide::page::Page;
 use rand::Rng;
+use std::io::Write;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use tracing::{info, warn};
 
 pub async fn create_medium_draft_from_review_html(
@@ -61,7 +63,8 @@ pub async fn create_medium_draft_from_review_html(
         mouse_move_and_click(&medium_page, x, y).await?;
     }
 
-    copy_text_via_clipboard(&review_page, &body_text).await?;
+    set_system_clipboard(&body_text).context("failed to set system clipboard")?;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     paste_from_clipboard(&medium_page).await?;
 
     open_publish_flow(&medium_page).await;
@@ -378,37 +381,53 @@ async fn focus_medium_title(medium_page: &Page) -> Result<()> {
     Ok(())
 }
 
-async fn copy_text_via_clipboard(source_page: &Page, text: &str) -> Result<()> {
-    let payload = js_escape_for_template_literal(text);
-    let res: serde_json::Value = source_page
-        .evaluate(format!(
-            r#"(() => {{
-  const text = `{payload}`;
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.left = '-9999px';
-  ta.style.top = '0';
-  document.body.appendChild(ta);
-  ta.focus();
-  ta.select();
-  const ok = document.execCommand('copy');
-  document.body.removeChild(ta);
-  return {{ ok }};
-}})()"#
-        ))
-        .await?
-        .into_value()?;
-
-    if res.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-        bail!("copy failed (clipboard may be blocked): {}", res);
-    }
-    Ok(())
-}
-
 async fn paste_from_clipboard(target_page: &Page) -> Result<()> {
     // Try to look like a real user: Ctrl+V.
     send_ctrl_combo(target_page, "v", 86).await
+}
+
+fn set_system_clipboard(text: &str) -> Result<()> {
+    // Prefer Wayland if available.
+    let is_wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+
+    if is_wayland {
+        if try_pipe_to_command("wl-copy", &[], text)? {
+            return Ok(());
+        }
+    }
+
+    // Fallback to X11.
+    if try_pipe_to_command("xclip", &["-selection", "clipboard"], text)? {
+        return Ok(());
+    }
+
+    // Another common X11 tool.
+    if try_pipe_to_command("xsel", &["--clipboard", "--input"], text)? {
+        return Ok(());
+    }
+
+    bail!("no clipboard tool found (need wl-copy, xclip, or xsel)");
+}
+
+fn try_pipe_to_command(bin: &str, args: &[&str], text: &str) -> Result<bool> {
+    let mut child = match Command::new(bin)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    Ok(status.success())
 }
 
 async fn send_ctrl_combo(page: &Page, key: &str, vk: i64) -> Result<()> {
