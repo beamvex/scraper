@@ -1,5 +1,5 @@
-mod medium;
 mod openai;
+mod computer_queries;
 mod util;
 mod wordpress_com;
 
@@ -7,11 +7,11 @@ use anyhow::Result;
 use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
+use crate::computer_queries::COMPUTER_QUERIES;
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
@@ -37,59 +37,8 @@ async fn main() -> Result<()> {
         info!("handler task finished");
     });
 
-    let computer_queries = [
-        "mechanical keyboard",
-        "gaming mouse",
-        "usb c hub",
-        "nvme ssd",
-        "27 inch monitor",
-        "laptop stand",
-        "wifi 6 router",
-        "webcam 1080p",
-        "noise cancelling headset",
-        "raspberry pi kit",
-        "usb microphone",
-        "stream deck",
-        "ergonomic mouse",
-        "keyboard wrist rest",
-        "monitor arm",
-        "laptop dock",
-        "thunderbolt dock",
-        "portable monitor",
-        "external ssd",
-        "ssd enclosure",
-        "usb c cable",
-        "displayport cable",
-        "hdmi cable 2.1",
-        "network switch",
-        "ethernet cable cat6",
-        "nas enclosure",
-        "ups battery backup",
-        "gaming chair",
-        "desk mat",
-        "standing desk",
-        "soldering kit",
-        "arduino starter kit",
-        "thermal paste",
-        "cpu cooler",
-        "pc case fan",
-        "graphics card support bracket",
-        "m.2 heatsink",
-        "bluetooth adapter",
-        "wifi adapter",
-        "usb c sd card reader",
-        "sd card",
-        "keycap set",
-        "mechanical keyboard switch",
-        "mouse pad",
-        "webcam mount",
-        "laptop privacy screen",
-        "cable management",
-        "desk lamp",
-    ];
-
     let mut rng = rand::rng();
-    let query = computer_queries.choose(&mut rng).unwrap();
+    let query = COMPUTER_QUERIES.choose(&mut rng).unwrap();
     info!(%query, "selected search query");
     let search_url = format!("https://www.amazon.com/s?k={}", query.replace(' ', "+"));
     info!(%search_url, "opening search url");
@@ -108,7 +57,16 @@ async fn main() -> Result<()> {
     info!(count = results.len(), "found result link candidates");
 
     if let Some(product) = results.choose(&mut rng) {
-        info!("clicking random result");
+        let product_url = product.attribute("href").await?;
+        if let Some(url) = &product_url {
+            if url.is_empty() {
+                info!("clicking random result (empty url)");
+            } else {
+                info!("clicking random result {url}");
+            }
+        } else {
+            info!("clicking random result (no url found)");
+        }
         product.click().await?;
         page.wait_for_navigation().await?;
 
@@ -159,99 +117,6 @@ async fn main() -> Result<()> {
             Err(err) => {
                 warn!(error = %err, "failed to generate review article");
             }
-        }
-
-        let image_urls: Vec<String> = page
-            .evaluate(
-                r#"(() => {
-  const urls = new Set();
-  const normalize = (u) => {
-    if (!u) return u;
-    if (typeof u !== 'string') return u;
-    // Try to strip Amazon sizing segments like: _AC_SX679_ or _SS40_
-    // Keep extension.
-    return u.replace(/\._[A-Z0-9,]+_\./, '.');
-  };
-  const add = (u) => {
-    if (!u) return;
-    if (typeof u !== 'string') return;
-    if (!u.startsWith('http')) return;
-    urls.add(normalize(u));
-  };
-
-  const landing = document.querySelector('#landingImage');
-  if (landing) {
-    try {
-      const dyn = landing.getAttribute('data-a-dynamic-image');
-      if (dyn) {
-        const obj = JSON.parse(dyn);
-        Object.keys(obj).forEach(add);
-      }
-    } catch (e) {}
-    add(landing.src);
-  }
-
-  // Amazon product gallery thumbnails
-  document
-    .querySelectorAll('#altImages img')
-    .forEach((img) => {
-      add(img.getAttribute('data-old-hires'));
-      add(img.getAttribute('data-src'));
-      add(img.currentSrc);
-      add(img.src);
-    });
-
-  document
-    .querySelectorAll('img')
-    .forEach((img) => {
-      add(img.currentSrc);
-      add(img.src);
-      add(img.getAttribute('data-old-hires'));
-      add(img.getAttribute('data-src'));
-    });
-
-  return Array.from(urls).slice(0, 30);
-})()"#,
-            )
-            .await?
-            .into_value::<Vec<String>>()?;
-
-        let mut seen = HashSet::new();
-        let image_urls: Vec<String> = image_urls
-            .into_iter()
-            .filter(|u| seen.insert(u.clone()))
-            .collect();
-
-        info!(count = image_urls.len(), "extracted image urls");
-
-        let client = reqwest::Client::new();
-        for (idx, url) in image_urls.iter().enumerate() {
-            let filename = format!("image_{:02}.jpg", idx + 1);
-            let path = product_dir.join(filename);
-
-            match client.get(url).send().await {
-                Ok(resp) => match resp.bytes().await {
-                    Ok(bytes) => {
-                        if let Err(err) = tokio::fs::write(&path, bytes).await {
-                            warn!(%url, path = %path.display(), error = %err, "failed to write image");
-                        } else {
-                            info!(%url, path = %path.display(), "saved image");
-                        }
-                    }
-                    Err(err) => {
-                        warn!(%url, error = %err, "failed to read image body");
-                    }
-                },
-                Err(err) => {
-                    warn!(%url, error = %err, "failed to download image");
-                }
-            }
-        }
-
-        if let Ok(Some(url)) = page.url().await {
-            info!(%url, "completed product page capture");
-        } else {
-            info!("completed product page capture");
         }
 
         page.close().await?;
