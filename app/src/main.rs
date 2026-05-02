@@ -87,6 +87,7 @@ async fn main() -> Result<()> {
         tokio::fs::write(&html_path, html).await?;
         info!(path = %html_path.display(), "saved page html");
 
+        info!("calling openai to generate review article");
         let product_url = page.url().await.ok().flatten();
         match generate_review_article_html(
             &openai_api_key,
