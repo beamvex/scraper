@@ -4,7 +4,7 @@ use serde_json::json;
 use std::env;
 use std::path::Path;
 
-pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Result<()> {
+pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Result<Option<String>> {
     let site = env::var("WPCOM_SITE").context("WPCOM_SITE is not set")?;
     let token = env::var("WPCOM_TOKEN").context("WPCOM_TOKEN is not set")?;
     let status = env::var("WPCOM_POST_STATUS").unwrap_or_else(|_| "draft".to_string());
@@ -47,7 +47,11 @@ pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Re
         );
     }
 
-    Ok(())
+    let post_url = serde_json::from_str::<serde_json::Value>(&body_text)
+        .ok()
+        .and_then(|v| v.get("URL").and_then(|u| u.as_str()).map(|s| s.to_string()));
+
+    Ok(post_url)
 }
 
 fn extract_title(html: &str) -> Option<String> {

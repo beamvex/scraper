@@ -1,5 +1,6 @@
 mod openai;
 mod computer_queries;
+mod ifttt;
 mod util;
 mod wordpress_com;
 
@@ -12,6 +13,7 @@ use tracing::{info, warn};
 
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::computer_queries::COMPUTER_QUERIES;
+use crate::ifttt::trigger_new_post;
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
@@ -107,8 +109,11 @@ async fn main() -> Result<()> {
                 info!(path = %review_path.display(), "saved review article");
 
                 match publish_review_html_to_wordpress_com(&review_path).await {
-                    Ok(()) => {
+                    Ok(post_url) => {
                         info!("created WordPress.com post");
+                        if let Err(err) = trigger_new_post(&product_name, post_url.as_deref()).await {
+                            warn!(error = %err, "failed to trigger IFTTT webhook");
+                        }
                     }
                     Err(err) => {
                         warn!(error = %err, "failed to create WordPress.com post");
