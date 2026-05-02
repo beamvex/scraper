@@ -17,6 +17,8 @@ use crate::ifttt::trigger_new_post;
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
+const DEBUG: bool = true;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     if let Ok(home) = std::env::var("HOME") {
@@ -88,6 +90,10 @@ async fn main() -> Result<()> {
         let html_path = product_dir.join("page.html");
         tokio::fs::write(&html_path, html).await?;
         info!(path = %html_path.display(), "saved page html");
+
+        if DEBUG {
+            return Ok(());
+        }
 
         info!("calling openai to generate review article");
         let product_url = page.url().await.ok().flatten();
