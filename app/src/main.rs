@@ -17,7 +17,7 @@ use crate::ifttt::trigger_new_post;
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
-const DEBUG: bool = true;
+const DEBUG: bool = false;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -81,8 +81,6 @@ async fn main() -> Result<()> {
         let product_folder_name = sanitize_path_component(&product_name);
         let product_dir: PathBuf = ["/data", &product_folder_name].iter().collect();
 
-        let openai_api_key = load_chatgpt_key().await?;
-
         tokio::fs::create_dir_all(&product_dir).await?;
         info!(dir = %product_dir.display(), name = %product_name, "created product directory");
 
@@ -91,9 +89,73 @@ async fn main() -> Result<()> {
         tokio::fs::write(&html_path, html).await?;
         info!(path = %html_path.display(), "saved page html");
 
+        let main_image_url: Option<String> = page
+            .evaluate(
+                r#"(() => {
+  const landing = document.querySelector('#landingImage');
+  if (!landing) return null;
+
+  const dyn = landing.getAttribute('data-a-dynamic-image');
+  if (!dyn) return landing.src || null;
+
+  try {
+    const obj = JSON.parse(dyn);
+    let bestUrl = null;
+    let bestScore = -1;
+    for (const [url, dims] of Object.entries(obj)) {
+      if (!url || typeof url !== 'string') continue;
+      if (!Array.isArray(dims) || dims.length < 2) continue;
+      const w = Number(dims[0]) || 0;
+      const h = Number(dims[1]) || 0;
+      const score = w * h;
+      if (score > bestScore) {
+        bestScore = score;
+        bestUrl = url;
+      }
+    }
+    return bestUrl || landing.src || null;
+  } catch (e) {
+    return landing.src || null;
+  }
+})()"#,
+            )
+            .await?
+            .into_value::<Option<String>>()?;
+
+        let client = reqwest::Client::new();
+
+        if let Some(url) = main_image_url.as_deref() {
+            info!(%url, "downloading main product image");
+            let path = product_dir.join("main.jpg");
+            match client.get(url).send().await {
+                Ok(resp) => match resp.bytes().await {
+                    Ok(bytes) => {
+                        if let Err(err) = tokio::fs::write(&path, bytes).await {
+                            warn!(%url, path = %path.display(), error = %err, "failed to write main image");
+                        } else {
+                            info!(%url, path = %path.display(), "saved main image");
+                        }
+                    }
+                    Err(err) => {
+                        warn!(%url, error = %err, "failed to read main image body");
+                    }
+                },
+                Err(err) => {
+                    warn!(%url, error = %err, "failed to download main image");
+                }
+            }
+        } else {
+            warn!("no main product image url found");
+        }
+
         if DEBUG {
+            page.close().await?;
+            info!("closed product tab");
             return Ok(());
         }
+
+        let openai_api_key = load_chatgpt_key().await?;
+
 
         info!("calling openai to generate review article");
         let product_url = page.url().await.ok().flatten();
@@ -114,7 +176,14 @@ async fn main() -> Result<()> {
                 tokio::fs::write(&review_path, review_html).await?;
                 info!(path = %review_path.display(), "saved review article");
 
-                match publish_review_html_to_wordpress_com(&review_path).await {
+                let main_image_path = product_dir.join("main.jpg");
+                match publish_review_html_to_wordpress_com(
+                    &review_path,
+                    query,
+                    main_image_path.exists().then_some(main_image_path.as_path()),
+                )
+                .await
+                {
                     Ok(post_url) => {
                         info!("created WordPress.com post");
                         if let Err(err) = trigger_new_post(&product_name, post_url.as_deref()).await {

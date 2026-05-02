@@ -1,10 +1,15 @@
 use anyhow::{bail, Context, Result};
+use reqwest::multipart;
 use reqwest::Client;
 use serde_json::json;
 use std::env;
 use std::path::Path;
 
-pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Result<Option<String>> {
+pub async fn publish_review_html_to_wordpress_com(
+    review_html_path: &Path,
+    category: &str,
+    main_image_path: Option<&Path>,
+) -> Result<Option<String>> {
     let site = env::var("WPCOM_SITE").context("WPCOM_SITE is not set")?;
     let token = env::var("WPCOM_TOKEN").context("WPCOM_TOKEN is not set")?;
     let status = env::var("WPCOM_POST_STATUS").unwrap_or_else(|_| "draft".to_string());
@@ -13,14 +18,23 @@ pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Re
         .with_context(|| format!("failed to read {}", review_html_path.display()))?;
 
     let title = extract_title(&html).unwrap_or_else(|| "New post".to_string());
-    let content = extract_body_html(&html).unwrap_or_else(|| html.clone());
+    let mut content = extract_body_html(&html).unwrap_or_else(|| html.clone());
+
+    let client = Client::new();
+
+    if let Some(image_path) = main_image_path {
+        if image_path.exists() {
+            if let Some(media_url) = upload_media(&client, &site, &token, image_path).await? {
+                content = format!("<p><img src=\"{}\" alt=\"{}\" /></p>\n{}", media_url, title, content);
+            }
+        }
+    }
 
     let url = format!(
         "https://public-api.wordpress.com/rest/v1.1/sites/{}/posts/new",
         site
     );
 
-    let client = Client::new();
     let resp = client
         .post(url)
         .bearer_auth(token)
@@ -28,6 +42,7 @@ pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Re
             "title": title,
             "content": content,
             "status": status,
+            "categories": category,
         }))
         .send()
         .await
@@ -52,6 +67,68 @@ pub async fn publish_review_html_to_wordpress_com(review_html_path: &Path) -> Re
         .and_then(|v| v.get("URL").and_then(|u| u.as_str()).map(|s| s.to_string()));
 
     Ok(post_url)
+}
+
+async fn upload_media(
+    client: &Client,
+    site: &str,
+    token: &str,
+    image_path: &Path,
+) -> Result<Option<String>> {
+    let url = format!(
+        "https://public-api.wordpress.com/rest/v1.1/sites/{}/media/new",
+        site
+    );
+
+    let filename = image_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("main.jpg")
+        .to_string();
+
+    let bytes = std::fs::read(image_path)
+        .with_context(|| format!("failed to read image {}", image_path.display()))?;
+
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str("image/jpeg")
+        .unwrap();
+
+    let form = multipart::Form::new().part("media[]", part);
+
+    let resp = client
+        .post(url)
+        .bearer_auth(token)
+        .multipart(form)
+        .send()
+        .await
+        .context("failed to upload media to WordPress.com")?;
+
+    let status_code = resp.status();
+    let body_text = resp
+        .text()
+        .await
+        .context("failed to read WordPress.com media response body")?;
+
+    if !status_code.is_success() {
+        bail!(
+            "WordPress.com media upload failed: HTTP {}: {}",
+            status_code,
+            body_text
+        );
+    }
+
+    let media_url = serde_json::from_str::<serde_json::Value>(&body_text)
+        .ok()
+        .and_then(|v| {
+            v.get("media")
+                .and_then(|m| m.get(0))
+                .and_then(|m0| m0.get("URL").or_else(|| m0.get("url")))
+                .and_then(|u| u.as_str())
+                .map(|s| s.to_string())
+        });
+
+    Ok(media_url)
 }
 
 fn extract_title(html: &str) -> Option<String> {

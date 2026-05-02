@@ -36,6 +36,7 @@ pub async fn generate_review_article_html(
 Output requirements:\n\
 - Output valid HTML only (no Markdown).\n\
 - Use <article> with a single <h1>, then sections with <h2>.\n\
+- The first paragraph must NOT repeat the title verbatim or start with the product name; write a short hook/lead instead.\n\
 - Include: overview, key features, who it's for, pros/cons lists, pricing/value discussion, and verdict.\n\
 - Do not mention that you were given raw HTML; infer details from the provided page.\n\
 - Write at least 5 sections with h2 headers\n\
