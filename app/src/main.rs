@@ -18,6 +18,7 @@ use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 
 const DEBUG: bool = false;
+const AMAZON_BASE: &str = "https://www.amazon.com";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -62,17 +63,24 @@ async fn main() -> Result<()> {
 
     if let Some(product) = results.choose(&mut rng) {
         let product_url = product.attribute("href").await?;
-        if let Some(url) = &product_url {
-            if url.is_empty() {
-                info!("clicking random result (empty url)");
-            } else {
-                info!("clicking random result {url}");
-            }
-        } else {
-            info!("clicking random result (no url found)");
+        let Some(url) = product_url else {
+            warn!("no href found on selected result");
+            page.close().await?;
+            return Ok(());
+        };
+
+        if url.is_empty() {
+            warn!("selected result href is empty");
+            page.close().await?;
+            return Ok(());
         }
-        product.click().await?;
-        page.wait_for_navigation().await?;
+
+        let target_url = resolve_amazon_url(&url);
+        info!(%target_url, "navigating to product url");
+
+        tokio::time::timeout(std::time::Duration::from_secs(60), page.goto(target_url))
+            .await
+            .map_err(|_| anyhow::anyhow!("navigation timeout"))??;
 
         let product_name: String = page
             .evaluate("document.title")
@@ -207,4 +215,14 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_amazon_url(href: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        href.to_string()
+    } else if href.starts_with('/') {
+        format!("{}{}", AMAZON_BASE, href)
+    } else {
+        format!("{}/{}", AMAZON_BASE, href)
+    }
 }
