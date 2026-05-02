@@ -20,6 +20,10 @@ pub async fn publish_review_html_to_wordpress_com(
     let title = extract_title(&html).unwrap_or_else(|| "New post".to_string());
     let mut content = extract_body_html(&html).unwrap_or_else(|| html.clone());
 
+    content = content.replace(&title, "");
+
+
+    
     let client = Client::new();
 
     if let Some(image_path) = main_image_path {
