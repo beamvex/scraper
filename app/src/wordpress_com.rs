@@ -26,9 +26,12 @@ pub async fn publish_review_html_to_wordpress_com(
     
     let client = Client::new();
 
+    let mut featured_image: Option<String> = None;
+
     if let Some(image_path) = main_image_path {
         if image_path.exists() {
             if let Some(media_url) = upload_media(&client, &site, &token, image_path).await? {
+                featured_image = Some(media_url.clone());
                 content = format!("<p><img src=\"{}\" alt=\"{}\" /></p>\n{}", media_url, title, content);
             }
         }
@@ -39,15 +42,20 @@ pub async fn publish_review_html_to_wordpress_com(
         site
     );
 
+    let mut payload = serde_json::Map::new();
+    payload.insert("title".to_string(), json!(title));
+    payload.insert("content".to_string(), json!(content));
+    payload.insert("status".to_string(), json!(status));
+    payload.insert("categories".to_string(), json!(category));
+
+    if let Some(featured_image) = featured_image {
+        payload.insert("featured_image".to_string(), json!(featured_image));
+    }
+
     let resp = client
         .post(url)
         .bearer_auth(token)
-        .json(&json!({
-            "title": title,
-            "content": content,
-            "status": status,
-            "categories": category,
-        }))
+        .json(&payload)
         .send()
         .await
         .context("failed to send WordPress.com create post request")?;
