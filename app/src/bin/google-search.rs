@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chromiumoxide::browser::Browser;
 use futures::StreamExt;
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 #[tokio::main]
@@ -38,37 +39,44 @@ async fn main() -> Result<()> {
         .await
         .context("failed to open google search page")?;
 
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let out_dir: PathBuf = ["/data", "google-results"].iter().collect();
+    tokio::fs::create_dir_all(&out_dir)
+        .await
+        .with_context(|| format!("failed to create {}", out_dir.display()))?;
 
-    let results: serde_json::Value = page
-        .evaluate(
-            r#"(() => {
-  const out = [];
-  const blocks = Array.from(document.querySelectorAll('div.g')).slice(0, 8);
-  for (const b of blocks) {
-    const a = b.querySelector('a[href]');
-    const h3 = b.querySelector('h3');
-    const title = h3 ? (h3.innerText || '').trim() : '';
-    const href = a ? (a.href || '') : '';
-    if (title && href) out.push({ title, href });
-  }
-  return out;
-})()"#,
-        )
-        .await?
-        .into_value()?;
+    for page_idx in 0..50usize {
+        let start = page_idx * 10;
+        let page_url = format!(
+            "https://www.google.com/search?q={}&num=10&start={}",
+            urlencoding::encode(&query),
+            start
+        );
 
-    if let Some(arr) = results.as_array() {
-        if arr.is_empty() {
-            warn!("no results found (possible consent/captcha page)");
+        info!(idx = page_idx + 1, %page_url, "loading google results page");
+        page.goto(page_url)
+            .await
+            .context("failed to navigate google results page")?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
+
+        let html: String = page
+            .evaluate("document.documentElement.outerHTML")
+            .await?
+            .into_value()
+            .context("failed to read page html")?;
+
+        if html.len() < 2000 {
+            warn!(
+                idx = page_idx + 1,
+                len = html.len(),
+                "captured html is unexpectedly small (possible interstitial/captcha)"
+            );
         }
-        for (idx, item) in arr.iter().enumerate() {
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let href = item.get("href").and_then(|v| v.as_str()).unwrap_or("");
-            println!("{}\t{}\t{}", idx + 1, title, href);
-        }
-    } else {
-        warn!("unexpected results shape: {}", results);
+
+        let path = out_dir.join(format!("page_{:03}.html", page_idx + 1));
+        tokio::fs::write(&path, html)
+            .await
+            .with_context(|| format!("failed to write {}", path.display()))?;
     }
 
     Ok(())
