@@ -232,6 +232,11 @@ async fn maybe_tweet_new_post(title: &str, post_url: Option<&str>) -> Result<()>
         return Ok(());
     };
 
+    // Only tweet 1/10 of the time.
+    if rand::random::<u8>() % 10 != 0 {
+        return Ok(());
+    }
+
     // Default: enabled if X_CLIENT_ID is set.
     let client_id = match std::env::var("X_CLIENT_ID") {
         Ok(v) if !v.trim().is_empty() => v,
