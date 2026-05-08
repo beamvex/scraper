@@ -1,21 +1,23 @@
-mod openai;
 mod computer_queries;
 mod ifttt;
+mod openai;
 mod util;
 mod wordpress_com;
+mod x;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::computer_queries::COMPUTER_QUERIES;
 use crate::ifttt::trigger_new_post;
+use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
+use crate::x::{default_token_path, post_tweet_with_retry};
 
 const DEBUG: bool = false;
 const AMAZON_BASE: &str = "https://www.amazon.com";
@@ -164,7 +166,6 @@ async fn main() -> Result<()> {
 
         let openai_api_key = load_chatgpt_key().await?;
 
-
         info!("calling openai to generate review article");
         let product_url = page.url().await.ok().flatten();
         match generate_review_article_html(
@@ -188,14 +189,23 @@ async fn main() -> Result<()> {
                 match publish_review_html_to_wordpress_com(
                     &review_path,
                     query,
-                    main_image_path.exists().then_some(main_image_path.as_path()),
+                    main_image_path
+                        .exists()
+                        .then_some(main_image_path.as_path()),
                 )
                 .await
                 {
                     Ok(post_url) => {
                         info!("created WordPress.com post");
-                        if let Err(err) = trigger_new_post(&product_name, post_url.as_deref()).await {
+                        if let Err(err) = trigger_new_post(&product_name, post_url.as_deref()).await
+                        {
                             warn!(error = %err, "failed to trigger IFTTT webhook");
+                        }
+
+                        if let Err(err) =
+                            maybe_tweet_new_post(&product_name, post_url.as_deref()).await
+                        {
+                            warn!(error = %err, "failed to post X tweet");
                         }
                     }
                     Err(err) => {
@@ -215,6 +225,56 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn maybe_tweet_new_post(title: &str, post_url: Option<&str>) -> Result<()> {
+    let Some(url) = post_url.filter(|u| !u.trim().is_empty()) else {
+        return Ok(());
+    };
+
+    // Default: enabled if X_CLIENT_ID is set.
+    let client_id = match std::env::var("X_CLIENT_ID") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return Ok(()),
+    };
+
+    let client_secret = std::env::var("X_CLIENT_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
+    let token_path = match std::env::var("X_TOKEN_PATH") {
+        Ok(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
+        _ => default_token_path().context("HOME not set; cannot infer X token path")?,
+    };
+
+    let tweet_text = build_tweet_text(title, url);
+    let tweet_id = post_tweet_with_retry(
+        &token_path,
+        &client_id,
+        client_secret.as_deref(),
+        &tweet_text,
+    )
+    .await?;
+
+    info!(%tweet_id, "posted X tweet");
+    Ok(())
+}
+
+fn build_tweet_text(title: &str, url: &str) -> String {
+    // Keep it simple: the link will generate a card/preview (including the featured image).
+    // Be conservative about length; truncate title if needed.
+    let mut t = title.trim().replace('\n', " ");
+    while t.contains("  ") {
+        t = t.replace("  ", " ");
+    }
+
+    // Leave headroom for the URL and whitespace.
+    if t.chars().count() > 220 {
+        t = t.chars().take(217).collect::<String>();
+        t.push_str("...");
+    }
+
+    format!("{}\n{}", t, url)
 }
 
 fn resolve_amazon_url(href: &str) -> String {
