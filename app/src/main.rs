@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::computer_queries::COMPUTER_QUERIES;
-use crate::facebook::post_link_to_page;
+use crate::facebook::post_photo_to_page;
 use crate::ifttt::trigger_new_post;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::util::sanitize_path_component;
@@ -205,7 +205,12 @@ async fn main() -> Result<()> {
                         }
 
                         if let Err(err) =
-                            post_link_to_page(&product_name, post_url.as_deref()).await
+                            post_photo_to_page(
+                                &product_name,
+                                post_url.as_deref(),
+                                main_image_path.exists().then_some(main_image_path.as_path()),
+                            )
+                            .await
                         {
                             warn!(error = %err, "failed to post to Facebook page");
                         }
