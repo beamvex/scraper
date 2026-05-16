@@ -2,6 +2,7 @@ mod computer_queries;
 mod facebook;
 mod ifttt;
 mod openai;
+mod pinterest;
 mod util;
 mod wordpress_com;
 mod x;
@@ -17,6 +18,7 @@ use crate::computer_queries::COMPUTER_QUERIES;
 use crate::facebook::post_photo_to_page;
 use crate::ifttt::trigger_new_post;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
+use crate::pinterest::maybe_post_pin_to_board;
 use crate::util::sanitize_path_component;
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
 use crate::x::{default_token_path, post_tweet_with_retry};
@@ -204,13 +206,14 @@ async fn main() -> Result<()> {
                             warn!(error = %err, "failed to trigger IFTTT webhook");
                         }
 
-                        if let Err(err) =
-                            post_photo_to_page(
-                                &product_name,
-                                post_url.as_deref(),
-                                main_image_path.exists().then_some(main_image_path.as_path()),
-                            )
-                            .await
+                        if let Err(err) = post_photo_to_page(
+                            &product_name,
+                            post_url.as_deref(),
+                            main_image_path
+                                .exists()
+                                .then_some(main_image_path.as_path()),
+                        )
+                        .await
                         {
                             warn!(error = %err, "failed to post to Facebook page");
                         }
@@ -219,6 +222,19 @@ async fn main() -> Result<()> {
                             maybe_tweet_new_post(&product_name, post_url.as_deref()).await
                         {
                             warn!(error = %err, "failed to post X tweet");
+                        }
+
+                        if let Err(err) = maybe_post_pin_to_board(
+                            &browser,
+                            &product_name,
+                            post_url.as_deref(),
+                            main_image_path
+                                .exists()
+                                .then_some(main_image_path.as_path()),
+                        )
+                        .await
+                        {
+                            warn!(error = %err, "failed to post pinterest pin");
                         }
                     }
                     Err(err) => {
