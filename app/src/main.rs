@@ -29,7 +29,7 @@ const AMAZON_BASE: &str = "https://www.amazon.com";
 #[tokio::main]
 async fn main() -> Result<()> {
     if let Ok(home) = std::env::var("HOME") {
-        let _ = dotenvy::from_filename(format!("{}/.env", home));
+        let _ = dotenvy::from_filename(format!("{}/.scraper.env", home));
     }
 
     tracing_subscriber::fmt()
