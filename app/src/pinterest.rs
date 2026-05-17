@@ -253,19 +253,52 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
 
 async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, link: &str) -> Result<()> {
     // Pinterest frequently changes selectors; do this via JS and dispatch input events.
+    let description = description
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if s.chars().count() > 450 {
+                s.chars().take(447).collect::<String>() + "..."
+            } else {
+                s.to_string()
+            }
+        });
+
     let title_js = format!(
         r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea'));
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
+  const setValue = (el, v) => {{
+    const tag = (el.tagName||'').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {{
+      el.focus();
+      el.value = v;
+    }} else {{
+      el.focus();
+      el.textContent = v;
+    }}
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+  }};
   const score = (el) => {{
+    if (el.getAttribute('type') === 'hidden') return -100;
     const name = (el.getAttribute('name')||'').toLowerCase();
     const ph = (el.getAttribute('placeholder')||'').toLowerCase();
     const aria = (el.getAttribute('aria-label')||'').toLowerCase();
     const id = (el.getAttribute('id')||'').toLowerCase();
+    const tag = (el.tagName||'').toLowerCase();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
-    if (s.includes('title')) return 3;
-    if (s.includes('pin title')) return 3;
-    return 0;
+    // Prefer inputs over textareas for title.
+    let sc = 0;
+    if ((el.tagName||'').toLowerCase() === 'input') sc += 1;
+    if (tag === 'div' && ce === 'true') sc += 1;
+    if (s.includes('title')) sc += 3;
+    if (s.includes('pin title')) sc += 3;
+    if (s.includes('add your title')) sc += 3;
+    if (s.includes('your title')) sc += 2;
+    return sc;
   }};
   let best = null;
   let bestScore = 0;
@@ -273,31 +306,44 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     const sc = score(el);
     if (sc > bestScore) {{ bestScore = sc; best = el; }}
   }}
-  if (!best) return false;
-  best.focus();
-  best.value = value;
-  best.dispatchEvent(new Event('input', {{ bubbles: true }}));
-  best.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  if (!best || bestScore < 3) return false;
+  setValue(best, value);
   return true;
-}})()"#,
+}} )()"#,
         serde_json::to_string(title).unwrap_or_else(|_| "\"\"".to_string())
     );
 
-    let description_js = description.map(|desc| {
+    let description_js = description.as_deref().map(|desc| {
         format!(
             r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea'));
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
+  const setValue = (el, v) => {{
+    const tag = (el.tagName||'').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {{
+      el.focus();
+      el.value = v;
+    }} else {{
+      el.focus();
+      el.textContent = v;
+    }}
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+  }};
   const score = (el) => {{
+    if (el.getAttribute('type') === 'hidden') return -100;
     const tag = (el.tagName||'').toLowerCase();
     const name = (el.getAttribute('name')||'').toLowerCase();
     const ph = (el.getAttribute('placeholder')||'').toLowerCase();
     const aria = (el.getAttribute('aria-label')||'').toLowerCase();
     const id = (el.getAttribute('id')||'').toLowerCase();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
     // Prefer textarea-like fields for description.
     let sc = 0;
     if (tag === 'textarea') sc += 2;
+    if (tag === 'div' && ce === 'true') sc += 1;
     if (s.includes('description')) sc += 3;
     if (s.includes('tell everyone') || s.includes('add a description')) sc += 3;
     if (s.includes('details')) sc += 1;
@@ -310,10 +356,7 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     if (sc > bestScore) {{ bestScore = sc; best = el; }}
   }}
   if (!best || bestScore < 3) return false;
-  best.focus();
-  best.value = value;
-  best.dispatchEvent(new Event('input', {{ bubbles: true }}));
-  best.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  setValue(best, value);
   return true;
 }})()"#,
             serde_json::to_string(desc).unwrap_or_else(|_| "\"\"".to_string())
@@ -323,17 +366,36 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     let link_js = format!(
         r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea'));
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
+  const setValue = (el, v) => {{
+    const tag = (el.tagName||'').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {{
+      el.focus();
+      el.value = v;
+    }} else {{
+      el.focus();
+      el.textContent = v;
+    }}
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+  }};
   const score = (el) => {{
     const name = (el.getAttribute('name')||'').toLowerCase();
     const ph = (el.getAttribute('placeholder')||'').toLowerCase();
     const aria = (el.getAttribute('aria-label')||'').toLowerCase();
     const id = (el.getAttribute('id')||'').toLowerCase();
+    const tag = (el.tagName||'').toLowerCase();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
     if (s.includes('destination')) return 3;
     if (s.includes('website')) return 3;
     if (s.includes('link')) return 2;
     if (s.includes('url')) return 2;
+    // Some UIs label it as "Source".
+    if (s.includes('source')) return 2;
+    // Light preference for editable divs.
+    if (tag === 'div' && ce === 'true') return 1;
     return 0;
   }};
   let best = null;
@@ -342,40 +404,100 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     const sc = score(el);
     if (sc > bestScore) {{ bestScore = sc; best = el; }}
   }}
-  if (!best) return false;
-  best.focus();
-  best.value = value;
-  best.dispatchEvent(new Event('input', {{ bubbles: true }}));
-  best.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  if (!best || bestScore < 2) return false;
+  setValue(best, value);
   return true;
 }})()"#,
         serde_json::to_string(link).unwrap_or_else(|_| "\"\"".to_string())
     );
 
-    let _title_ok = page
-        .evaluate(title_js)
-        .await?
-        .into_value::<bool>()
-        .unwrap_or(false);
+    // The form fields often appear only after the image has been processed.
+    let mut title_ok = false;
+    let mut desc_ok = false;
+    let mut link_ok = false;
+    for _ in 0..20 {
+        if !title_ok {
+            title_ok = page
+                .evaluate(title_js.as_str())
+                .await?
+                .into_value::<bool>()
+                .unwrap_or(false);
+        }
 
-    if let Some(description_js) = description_js {
-        let _ = page
-            .evaluate(description_js)
-            .await?
-            .into_value::<bool>()
-            .unwrap_or(false);
+        if !desc_ok {
+            if let Some(description_js) = &description_js {
+                desc_ok = page
+                    .evaluate(description_js.as_str())
+                    .await?
+                    .into_value::<bool>()
+                    .unwrap_or(false);
+            } else {
+                desc_ok = true;
+            }
+        }
+
+        if !link_ok {
+            link_ok = page
+                .evaluate(link_js.as_str())
+                .await?
+                .into_value::<bool>()
+                .unwrap_or(false);
+        }
+
+        if title_ok && desc_ok && link_ok {
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    let link_ok = page
-        .evaluate(link_js)
-        .await?
-        .into_value::<bool>()
-        .unwrap_or(false);
+    if !title_ok {
+        warn!("could not find pinterest title field; continuing");
+    }
+    if description_js.is_some() && !desc_ok {
+        warn!("could not find pinterest description field; continuing");
+    }
     if !link_ok {
         warn!("could not find pinterest link field; continuing");
     }
 
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    if !title_ok || !link_ok {
+        let debug_js = r#"(() => {
+  const norm = (s) => (s||'').toLowerCase();
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]')).slice(0, 250);
+  const fields = els.map(el => ({
+    tag: (el.tagName||'').toLowerCase(),
+    type: el.getAttribute('type') || '',
+    name: el.getAttribute('name') || '',
+    id: el.getAttribute('id') || '',
+    aria: el.getAttribute('aria-label') || '',
+    placeholder: el.getAttribute('placeholder') || '',
+    contenteditable: el.getAttribute('contenteditable') || '',
+    class: (el.className||'').toString().slice(0,120),
+  }));
+  const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
+  return {
+    href: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    fieldCount: els.length,
+    fields,
+    innerTextSnippet: text.trim().slice(0, 2000),
+  };
+})()"#;
+
+        if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+            let debug_path = Path::new("/data/pinterest_fields_debug.json");
+            if let Ok(s) = serde_json::to_string_pretty(&v) {
+                if let Err(err) = tokio::fs::write(debug_path, s).await {
+                    warn!(error = %err, path = %debug_path.display(), "failed to write pinterest fields debug json");
+                } else {
+                    warn!(path = %debug_path.display(), "wrote pinterest fields debug json");
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -469,16 +591,4 @@ async fn publish_pin(page: &Page) -> Result<()> {
     tokio::time::sleep(Duration::from_millis(3500)).await;
     info!("attempted to publish pinterest pin");
     Ok(())
-}
-
-async fn find_first(
-    page: &Page,
-    selectors: &[&str],
-) -> Result<Option<chromiumoxide::element::Element>> {
-    for sel in selectors {
-        if let Ok(el) = page.find_element(*sel).await {
-            return Ok(Some(el));
-        }
-    }
-    Ok(None)
 }
