@@ -64,6 +64,8 @@ async fn post_pin_to_board(
 
     tokio::time::sleep(Duration::from_millis(3000)).await;
 
+    wait_for_pin_creation_ui(&page).await?;
+
     if is_login_interstitial(&page).await.unwrap_or(false) {
         bail!(
             "pinterest appears to require login in the current browser session (redirected to login)"
@@ -76,6 +78,69 @@ async fn post_pin_to_board(
     publish_pin(&page).await?;
 
     Ok(())
+}
+
+async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
+    // Pin creation tool is a heavy SPA. If it doesn't render, selectors will all fail.
+    for _ in 0..60 {
+        let counts: (u64, u64, u64) = page
+            .evaluate(
+                r#"(() => {
+  const inputs = document.querySelectorAll('input').length;
+  const buttons = document.querySelectorAll('button').length;
+  const iframes = document.querySelectorAll('iframe').length;
+  return [inputs, buttons, iframes];
+})()"#,
+            )
+            .await?
+            .into_value::<(u64, u64, u64)>()
+            .unwrap_or((0, 0, 0));
+
+        // When loaded, we generally see a bunch of buttons/inputs.
+        if counts.1 >= 5 || counts.0 >= 5 {
+            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    let url = page.url().await.ok().flatten().unwrap_or_default();
+
+    if let Ok(html) = page.content().await {
+        let debug_path = Path::new("/data/pinterest_upload_debug.html");
+        if let Err(err) = tokio::fs::write(debug_path, html).await {
+            warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug html");
+        } else {
+            warn!(path = %debug_path.display(), "wrote pinterest debug html");
+        }
+    }
+
+    let debug_js = r#"(() => {
+  const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
+  return {
+    href: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    inputCount: document.querySelectorAll('input').length,
+    fileInputCount: document.querySelectorAll('input[type=file]').length,
+    buttonCount: document.querySelectorAll('button').length,
+    iframeCount: document.querySelectorAll('iframe').length,
+    innerTextSnippet: text.trim().slice(0, 2000),
+  };
+})()"#;
+
+    if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+        let debug_path = Path::new("/data/pinterest_upload_debug.json");
+        if let Ok(s) = serde_json::to_string_pretty(&v) {
+            if let Err(err) = tokio::fs::write(debug_path, s).await {
+                warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug json");
+            } else {
+                warn!(path = %debug_path.display(), "wrote pinterest debug json");
+            }
+        }
+    }
+
+    bail!("pinterest pin creation UI did not render (url: {})", url)
 }
 
 async fn is_login_interstitial(page: &Page) -> Result<bool> {
@@ -99,21 +164,85 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
     // Try common file input selectors.
     let selectors = ["input[type='file']", "input[type=\"file\"]"];
 
-    for sel in selectors {
-        if let Ok(el) = page.find_element(sel).await {
-            let files = vec![image_path.display().to_string()];
-            let cmd = SetFileInputFilesParams::builder()
-                .files(files)
-                .backend_node_id(el.backend_node_id)
-                .build()
-                .map_err(|e| anyhow::anyhow!(e))?;
+    // Pinterest often loads the input asynchronously; poll for a while.
+    for _ in 0..40 {
+        for sel in selectors {
+            if let Ok(el) = page.find_element(sel).await {
+                let files = vec![image_path.display().to_string()];
+                let cmd = SetFileInputFilesParams::builder()
+                    .files(files)
+                    .backend_node_id(el.backend_node_id)
+                    .build()
+                    .map_err(|e| anyhow::anyhow!(e))?;
 
-            if let Err(err) = page.execute(cmd).await {
-                warn!(selector = sel, error = %err, "failed to set pinterest file input files");
-                continue;
+                if let Err(err) = page.execute(cmd).await {
+                    warn!(selector = sel, error = %err, "failed to set pinterest file input files");
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(4500)).await;
+                return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(4500)).await;
-            return Ok(());
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    let url = page.url().await.ok().flatten().unwrap_or_default();
+    warn!(%url, "could not find pinterest image upload input");
+
+    if let Ok(html) = page.content().await {
+        let debug_path = Path::new("/data/pinterest_upload_debug.html");
+        if let Err(err) = tokio::fs::write(debug_path, html).await {
+            warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug html");
+        } else {
+            warn!(path = %debug_path.display(), "wrote pinterest debug html");
+        }
+    }
+
+    // Smaller debug: list iframes and some element metadata (helps when the HTML is mostly scripts).
+    let debug_js = r#"(() => {
+  const inputs = Array.from(document.querySelectorAll('input')).slice(0, 200).map(el => ({
+    type: el.getAttribute('type') || '',
+    name: el.getAttribute('name') || '',
+    id: el.id || '',
+    aria: el.getAttribute('aria-label') || '',
+    accept: el.getAttribute('accept') || '',
+    class: el.className || ''
+  }));
+  const buttons = Array.from(document.querySelectorAll('button')).slice(0, 200).map(el => ({
+    text: (el.innerText || '').trim().slice(0, 120),
+    aria: el.getAttribute('aria-label') || '',
+    id: el.id || '',
+    class: el.className || ''
+  }));
+  const iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 50).map(el => ({
+    src: el.getAttribute('src') || '',
+    id: el.id || '',
+    title: el.getAttribute('title') || ''
+  }));
+  const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
+  return {
+    href: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    inputCount: document.querySelectorAll('input').length,
+    fileInputCount: document.querySelectorAll('input[type=file]').length,
+    iframeCount: document.querySelectorAll('iframe').length,
+    innerTextSnippet: text.trim().slice(0, 1200),
+    inputs,
+    buttons,
+    iframes,
+  };
+})()"#;
+
+    if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+        let debug_path = Path::new("/data/pinterest_upload_debug.json");
+        if let Ok(s) = serde_json::to_string_pretty(&v) {
+            if let Err(err) = tokio::fs::write(debug_path, s).await {
+                warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug json");
+            } else {
+                warn!(path = %debug_path.display(), "wrote pinterest debug json");
+            }
         }
     }
 
