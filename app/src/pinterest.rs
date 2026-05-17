@@ -84,22 +84,30 @@ async fn post_pin_to_board(
 
 async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
     // Pin creation tool is a heavy SPA. If it doesn't render, selectors will all fail.
-    for _ in 0..60 {
-        let counts: (u64, u64, u64) = page
+    for _ in 0..360 {
+        let counts: (u64, u64, u64, u64, u64) = page
             .evaluate(
                 r#"(() => {
-  const inputs = document.querySelectorAll('input').length;
-  const buttons = document.querySelectorAll('button').length;
+  const inputs = document.querySelectorAll('input,textarea').length;
+  const editables = document.querySelectorAll('[contenteditable="true"]').length;
+  const fileInputs = document.querySelectorAll('input[type=file]').length;
+  const buttons = document.querySelectorAll('button,div[role=button],a[role=button]').length;
   const iframes = document.querySelectorAll('iframe').length;
-  return [inputs, buttons, iframes];
+  return [inputs, editables, fileInputs, buttons, iframes];
 })()"#,
             )
             .await?
-            .into_value::<(u64, u64, u64)>()
-            .unwrap_or((0, 0, 0));
+            .into_value::<(u64, u64, u64, u64, u64)>()
+            .unwrap_or((0, 0, 0, 0, 0));
 
-        // When loaded, we generally see a bunch of buttons/inputs.
-        if counts.1 >= 5 || counts.0 >= 5 {
+        // Best signal: the image upload control exists.
+        if counts.2 >= 1 {
+            return Ok(());
+        }
+
+        // Otherwise: the SPA is likely ready if we see a reasonable number of interactive elements.
+        let formish = counts.0.saturating_add(counts.1);
+        if counts.3 >= 6 || (counts.3 >= 4 && formish >= 3) {
             return Ok(());
         }
 
@@ -119,15 +127,30 @@ async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
 
     let debug_js = r#"(() => {
   const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
+  const sample = (sel) => Array.from(document.querySelectorAll(sel)).slice(0, 40).map(el => ({
+    tag: (el.tagName||'').toLowerCase(),
+    type: el.getAttribute('type') || '',
+    role: el.getAttribute('role') || '',
+    aria: el.getAttribute('aria-label') || '',
+    name: el.getAttribute('name') || '',
+    id: el.getAttribute('id') || '',
+    placeholder: el.getAttribute('placeholder') || '',
+    contenteditable: el.getAttribute('contenteditable') || '',
+    text: (el.innerText || '').trim().slice(0, 120),
+  }));
   return {
     href: location.href,
     title: document.title,
     readyState: document.readyState,
-    inputCount: document.querySelectorAll('input').length,
+    inputCount: document.querySelectorAll('input,textarea').length,
+    editableCount: document.querySelectorAll('[contenteditable="true"]').length,
     fileInputCount: document.querySelectorAll('input[type=file]').length,
     buttonCount: document.querySelectorAll('button').length,
+    roleButtonCount: document.querySelectorAll('button,div[role=button],a[role=button]').length,
     iframeCount: document.querySelectorAll('iframe').length,
     innerTextSnippet: text.trim().slice(0, 2000),
+    inputsSample: sample('input,textarea,[contenteditable="true"]'),
+    buttonsSample: sample('button,div[role=button],a[role=button]'),
   };
 })()"#;
 
@@ -267,20 +290,29 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     let title_js = format!(
         r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
   const setValue = (el, v) => {{
-    const tag = (el.tagName||'').toLowerCase();
-    if (tag === 'input' || tag === 'textarea') {{
-      el.focus();
-      el.value = v;
+    el.focus();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
+    if (ce === 'true') {{
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, v);
     }} else {{
-      el.focus();
-      el.textContent = v;
+      // React-safe: use native setter then execCommand for controlled inputs.
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+      if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, v);
+      else el.value = v;
+      document.execCommand('selectAll', false, null);
     }}
     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
   }};
+  // Try known IDs first.
+  const byId = document.getElementById('storyboard-selector-title');
+  if (byId) {{ setValue(byId, value); return true; }}
+  // Fallback: heuristic scoring.
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
   const score = (el) => {{
     if (el.getAttribute('type') === 'hidden') return -100;
     const name = (el.getAttribute('name')||'').toLowerCase();
@@ -290,23 +322,20 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     const tag = (el.tagName||'').toLowerCase();
     const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
-    // Prefer inputs over textareas for title.
     let sc = 0;
-    if ((el.tagName||'').toLowerCase() === 'input') sc += 1;
+    if (tag === 'input') sc += 1;
     if (tag === 'div' && ce === 'true') sc += 1;
     if (s.includes('title')) sc += 3;
     if (s.includes('pin title')) sc += 3;
+    if (s.includes('tell everyone')) sc += 3;
+    if (s.includes('your pin is about')) sc += 3;
     if (s.includes('add your title')) sc += 3;
     if (s.includes('your title')) sc += 2;
     return sc;
   }};
-  let best = null;
-  let bestScore = 0;
-  for (const el of els) {{
-    const sc = score(el);
-    if (sc > bestScore) {{ bestScore = sc; best = el; }}
-  }}
-  if (!best || bestScore < 3) return false;
+  let best = null; let bestScore = 0;
+  for (const el of els) {{ const sc = score(el); if (sc > bestScore) {{ bestScore = sc; best = el; }} }}
+  if (!best || bestScore < 2) return false;
   setValue(best, value);
   return true;
 }} )()"#,
@@ -317,20 +346,35 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
         format!(
             r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
-  const setValue = (el, v) => {{
-    const tag = (el.tagName||'').toLowerCase();
-    if (tag === 'input' || tag === 'textarea') {{
-      el.focus();
-      el.value = v;
-    }} else {{
-      el.focus();
-      el.textContent = v;
-    }}
+  const setValueContentEditable = (el, v) => {{
+    el.focus();
+    // Select all existing content then replace via execCommand so React sees the change.
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, v);
     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
   }};
+  const setValueInput = (el, v) => {{
+    el.focus();
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (nativeInputValueSetter && nativeInputValueSetter.set) nativeInputValueSetter.set.call(el, v);
+    else el.value = v;
+    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+  }};
+  const setValue = (el, v) => {{
+    const tag = (el.tagName||'').toLowerCase();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
+    if (ce === 'true') setValueContentEditable(el, v);
+    else setValueInput(el, v);
+  }};
+  // Try known aria-label first (Pinterest uses "Describe your Pin").
+  const byAria = document.querySelector('[aria-label="Describe your Pin"]');
+  if (byAria) {{ setValue(byAria, value); return true; }}
+  // Fallback: heuristic scoring.
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
   const score = (el) => {{
     if (el.getAttribute('type') === 'hidden') return -100;
     const tag = (el.tagName||'').toLowerCase();
@@ -340,22 +384,18 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     const id = (el.getAttribute('id')||'').toLowerCase();
     const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
-    // Prefer textarea-like fields for description.
     let sc = 0;
     if (tag === 'textarea') sc += 2;
     if (tag === 'div' && ce === 'true') sc += 1;
     if (s.includes('description')) sc += 3;
+    if (s.includes('describe')) sc += 3;
     if (s.includes('tell everyone') || s.includes('add a description')) sc += 3;
     if (s.includes('details')) sc += 1;
     return sc;
   }};
-  let best = null;
-  let bestScore = 0;
-  for (const el of els) {{
-    const sc = score(el);
-    if (sc > bestScore) {{ bestScore = sc; best = el; }}
-  }}
-  if (!best || bestScore < 3) return false;
+  let best = null; let bestScore = 0;
+  for (const el of els) {{ const sc = score(el); if (sc > bestScore) {{ bestScore = sc; best = el; }} }}
+  if (!best || bestScore < 2) return false;
   setValue(best, value);
   return true;
 }})()"#,
@@ -366,20 +406,28 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     let link_js = format!(
         r#"(() => {{
   const value = {};
-  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
   const setValue = (el, v) => {{
-    const tag = (el.tagName||'').toLowerCase();
-    if (tag === 'input' || tag === 'textarea') {{
-      el.focus();
-      el.value = v;
+    el.focus();
+    const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
+    if (ce === 'true') {{
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, v);
     }} else {{
-      el.focus();
-      el.textContent = v;
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+      if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, v);
+      else el.value = v;
+      document.execCommand('selectAll', false, null);
     }}
     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
   }};
+  // Try known IDs first.
+  const byId = document.getElementById('WebsiteField');
+  if (byId) {{ setValue(byId, value); return true; }}
+  // Fallback: heuristic scoring.
+  const els = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
   const score = (el) => {{
     const name = (el.getAttribute('name')||'').toLowerCase();
     const ph = (el.getAttribute('placeholder')||'').toLowerCase();
@@ -390,24 +438,20 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
     const s = name + ' ' + ph + ' ' + aria + ' ' + id;
     if (s.includes('destination')) return 3;
     if (s.includes('website')) return 3;
+    if (s.includes('add a link')) return 3;
     if (s.includes('link')) return 2;
     if (s.includes('url')) return 2;
-    // Some UIs label it as "Source".
     if (s.includes('source')) return 2;
-    // Light preference for editable divs.
+    if (tag === 'input' && (el.getAttribute('type')||'').toLowerCase() === 'url') return 2;
     if (tag === 'div' && ce === 'true') return 1;
     return 0;
   }};
-  let best = null;
-  let bestScore = 0;
-  for (const el of els) {{
-    const sc = score(el);
-    if (sc > bestScore) {{ bestScore = sc; best = el; }}
-  }}
+  let best = null; let bestScore = 0;
+  for (const el of els) {{ const sc = score(el); if (sc > bestScore) {{ bestScore = sc; best = el; }} }}
   if (!best || bestScore < 2) return false;
   setValue(best, value);
   return true;
-}})()"#,
+}} )()"#,
         serde_json::to_string(link).unwrap_or_else(|_| "\"\"".to_string())
     );
 
@@ -513,9 +557,11 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
     let board_js = format!(
         r#"(() => {{
   const needle = {};
-  const buttons = Array.from(document.querySelectorAll('button,div[role=button]'));
-  const open = buttons.find(b => (b.innerText||'').toLowerCase().includes('board'))
-    || buttons.find(b => (b.getAttribute('aria-label')||'').toLowerCase().includes('board'));
+  const buttons = Array.from(document.querySelectorAll('button,div[role=button],a[role=button]'));
+  const norm = (s) => (s||'').toLowerCase();
+  const open = buttons.find(b => norm(b.innerText).includes('choose a board'))
+    || buttons.find(b => norm(b.innerText).includes('board'))
+    || buttons.find(b => norm(b.getAttribute('aria-label')||'').includes('board'));
   if (!open) return false;
   open.click();
   return true;
@@ -531,6 +577,7 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
 
     if !opened {
         warn!("could not find pinterest board picker; continuing");
+        let _ = write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
         return Ok(());
     }
 
@@ -563,9 +610,50 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
     Ok(())
 }
 
+async fn write_debug_snapshot(page: &Page, path: &Path) -> Result<()> {
+    let debug_js = r#"(() => {
+  const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
+  const sample = (sel) => Array.from(document.querySelectorAll(sel)).slice(0, 60).map(el => ({
+    tag: (el.tagName||'').toLowerCase(),
+    type: el.getAttribute('type') || '',
+    role: el.getAttribute('role') || '',
+    aria: el.getAttribute('aria-label') || '',
+    name: el.getAttribute('name') || '',
+    id: el.getAttribute('id') || '',
+    placeholder: el.getAttribute('placeholder') || '',
+    contenteditable: el.getAttribute('contenteditable') || '',
+    text: (el.innerText || '').trim().slice(0, 140),
+  }));
+  return {
+    href: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    inputCount: document.querySelectorAll('input,textarea').length,
+    editableCount: document.querySelectorAll('[contenteditable="true"]').length,
+    fileInputCount: document.querySelectorAll('input[type=file]').length,
+    buttonCount: document.querySelectorAll('button').length,
+    roleButtonCount: document.querySelectorAll('button,div[role=button],a[role=button]').length,
+    iframeCount: document.querySelectorAll('iframe').length,
+    innerTextSnippet: text.trim().slice(0, 2000),
+    inputsSample: sample('input,textarea,[contenteditable="true"]'),
+    buttonsSample: sample('button,div[role=button],a[role=button]'),
+  };
+})()"#;
+
+    let v = page
+        .evaluate(debug_js)
+        .await?
+        .into_value::<serde_json::Value>()
+        .unwrap_or(serde_json::json!({"error": "failed to evaluate debug snapshot"}));
+
+    let s = serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string());
+    tokio::fs::write(path, s).await?;
+    Ok(())
+}
+
 async fn publish_pin(page: &Page) -> Result<()> {
     let js = r#"(() => {
-  const btns = Array.from(document.querySelectorAll('button'));
+  const btns = Array.from(document.querySelectorAll('button,div[role=button],a[role=button]'));
   const norm = (s) => (s||'').toLowerCase().trim();
   const good = (b) => {
     const t = norm(b.innerText);
@@ -589,6 +677,7 @@ async fn publish_pin(page: &Page) -> Result<()> {
     }
 
     tokio::time::sleep(Duration::from_millis(3500)).await;
+    let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_debug.json")).await;
     info!("attempted to publish pinterest pin");
     Ok(())
 }
