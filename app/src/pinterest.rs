@@ -10,6 +10,7 @@ use tracing::{info, warn};
 pub async fn maybe_post_pin_to_board(
     browser: &Browser,
     title: &str,
+    description: Option<&str>,
     article_url: Option<&str>,
     image_path: Option<&Path>,
 ) -> Result<()> {
@@ -34,13 +35,14 @@ pub async fn maybe_post_pin_to_board(
         return Ok(());
     }
 
-    post_pin_to_board(browser, &board_url, title, article_url, image_path).await
+    post_pin_to_board(browser, &board_url, title, description, article_url, image_path).await
 }
 
 async fn post_pin_to_board(
     browser: &Browser,
     board_url: &str,
     title: &str,
+    description: Option<&str>,
     link: &str,
     image_path: &Path,
 ) -> Result<()> {
@@ -73,7 +75,7 @@ async fn post_pin_to_board(
     }
 
     upload_image(&page, image_path).await?;
-    fill_text_fields(&page, title, link).await?;
+    fill_text_fields(&page, title, description, link).await?;
     choose_board(&page, board_url).await?;
     publish_pin(&page).await?;
 
@@ -249,7 +251,7 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
     bail!("could not find pinterest image upload input")
 }
 
-async fn fill_text_fields(page: &Page, title: &str, link: &str) -> Result<()> {
+async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, link: &str) -> Result<()> {
     // Pinterest frequently changes selectors; do this via JS and dispatch input events.
     let title_js = format!(
         r#"(() => {{
@@ -280,6 +282,43 @@ async fn fill_text_fields(page: &Page, title: &str, link: &str) -> Result<()> {
 }})()"#,
         serde_json::to_string(title).unwrap_or_else(|_| "\"\"".to_string())
     );
+
+    let description_js = description.map(|desc| {
+        format!(
+            r#"(() => {{
+  const value = {};
+  const els = Array.from(document.querySelectorAll('input,textarea'));
+  const score = (el) => {{
+    const tag = (el.tagName||'').toLowerCase();
+    const name = (el.getAttribute('name')||'').toLowerCase();
+    const ph = (el.getAttribute('placeholder')||'').toLowerCase();
+    const aria = (el.getAttribute('aria-label')||'').toLowerCase();
+    const id = (el.getAttribute('id')||'').toLowerCase();
+    const s = name + ' ' + ph + ' ' + aria + ' ' + id;
+    // Prefer textarea-like fields for description.
+    let sc = 0;
+    if (tag === 'textarea') sc += 2;
+    if (s.includes('description')) sc += 3;
+    if (s.includes('tell everyone') || s.includes('add a description')) sc += 3;
+    if (s.includes('details')) sc += 1;
+    return sc;
+  }};
+  let best = null;
+  let bestScore = 0;
+  for (const el of els) {{
+    const sc = score(el);
+    if (sc > bestScore) {{ bestScore = sc; best = el; }}
+  }}
+  if (!best || bestScore < 3) return false;
+  best.focus();
+  best.value = value;
+  best.dispatchEvent(new Event('input', {{ bubbles: true }}));
+  best.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  return true;
+}})()"#,
+            serde_json::to_string(desc).unwrap_or_else(|_| "\"\"".to_string())
+        )
+    });
 
     let link_js = format!(
         r#"(() => {{
@@ -313,13 +352,18 @@ async fn fill_text_fields(page: &Page, title: &str, link: &str) -> Result<()> {
         serde_json::to_string(link).unwrap_or_else(|_| "\"\"".to_string())
     );
 
-    let title_ok = page
+    let _title_ok = page
         .evaluate(title_js)
         .await?
         .into_value::<bool>()
         .unwrap_or(false);
-    if !title_ok {
-        warn!("could not find pinterest title field; continuing");
+
+    if let Some(description_js) = description_js {
+        let _ = page
+            .evaluate(description_js)
+            .await?
+            .into_value::<bool>()
+            .unwrap_or(false);
     }
 
     let link_ok = page

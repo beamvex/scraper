@@ -186,7 +186,7 @@ async fn main() -> Result<()> {
                 let reviews_dir: PathBuf = ["/data", "reviews"].iter().collect();
                 tokio::fs::create_dir_all(&reviews_dir).await?;
                 let review_path = reviews_dir.join(format!("{}.html", product_folder_name));
-                tokio::fs::write(&review_path, review_html).await?;
+                tokio::fs::write(&review_path, &review_html).await?;
                 info!(path = %review_path.display(), "saved review article");
 
                 let main_image_path = product_dir.join("main.jpg");
@@ -224,9 +224,13 @@ async fn main() -> Result<()> {
                             warn!(error = %err, "failed to post X tweet");
                         }
 
+                        let pin_title = extract_article_title(&review_html)
+                            .unwrap_or_else(|| product_name.clone());
+                        let pin_description = extract_first_paragraph_text(&review_html);
                         if let Err(err) = maybe_post_pin_to_board(
                             &browser,
-                            &product_name,
+                            &pin_title,
+                            pin_description.as_deref(),
                             post_url.as_deref(),
                             main_image_path
                                 .exists()
@@ -319,4 +323,68 @@ fn resolve_amazon_url(href: &str) -> String {
     } else {
         format!("{}/{}", AMAZON_BASE, href)
     }
+}
+
+fn extract_first_paragraph_text(html: &str) -> Option<String> {
+    let start = html.to_lowercase().find("<p")?;
+    let slice = &html[start..];
+    let gt = slice.find('>')?;
+    let after_open = &slice[(gt + 1)..];
+    let end = after_open.to_lowercase().find("</p>")?;
+    let inner = after_open[..end].trim();
+    if inner.is_empty() {
+        return None;
+    }
+    // Strip tags very roughly.
+    let mut out = String::with_capacity(inner.len());
+    let mut in_tag = false;
+    for ch in inner.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn extract_article_title(html: &str) -> Option<String> {
+    // Best-effort: <h1>..</h1> then <title>..</title>.
+    extract_between_case_insensitive(html, "<h1", "</h1>")
+        .and_then(|s| strip_first_tag_and_trim(&s))
+        .or_else(|| {
+            extract_between_case_insensitive(html, "<title", "</title>")
+                .and_then(|s| strip_first_tag_and_trim(&s))
+        })
+}
+
+fn strip_first_tag_and_trim(s: &str) -> Option<String> {
+    let gt = s.find('>')?;
+    let inner = s[(gt + 1)..].trim();
+    let inner = html_decode_minimal(inner);
+    if inner.is_empty() { None } else { Some(inner) }
+}
+
+fn extract_between_case_insensitive(haystack: &str, start_tag: &str, end_tag: &str) -> Option<String> {
+    let h_lower = haystack.to_ascii_lowercase();
+    let s_lower = start_tag.to_ascii_lowercase();
+    let e_lower = end_tag.to_ascii_lowercase();
+
+    let start_idx = h_lower.find(&s_lower)?;
+    let after_start = &haystack[start_idx..];
+
+    let end_lower_idx = h_lower[start_idx..].find(&e_lower)?;
+    let end_idx = start_idx + end_lower_idx;
+
+    Some(after_start[..(end_idx - start_idx)].to_string())
+}
+
+fn html_decode_minimal(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
 }
