@@ -35,7 +35,15 @@ pub async fn maybe_post_pin_to_board(
         return Ok(());
     }
 
-    post_pin_to_board(browser, &board_url, title, description, article_url, image_path).await
+    post_pin_to_board(
+        browser,
+        &board_url,
+        title,
+        description,
+        article_url,
+        image_path,
+    )
+    .await
 }
 
 async fn post_pin_to_board(
@@ -154,7 +162,11 @@ async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
   };
 })()"#;
 
-    if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+    if let Ok(v) = page
+        .evaluate(debug_js)
+        .await?
+        .into_value::<serde_json::Value>()
+    {
         let debug_path = Path::new("/data/pinterest_upload_debug.json");
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             if let Err(err) = tokio::fs::write(debug_path, s).await {
@@ -260,7 +272,11 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
   };
 })()"#;
 
-    if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+    if let Ok(v) = page
+        .evaluate(debug_js)
+        .await?
+        .into_value::<serde_json::Value>()
+    {
         let debug_path = Path::new("/data/pinterest_upload_debug.json");
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             if let Err(err) = tokio::fs::write(debug_path, s).await {
@@ -274,7 +290,12 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
     bail!("could not find pinterest image upload input")
 }
 
-async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, link: &str) -> Result<()> {
+async fn fill_text_fields(
+    page: &Page,
+    title: &str,
+    description: Option<&str>,
+    link: &str,
+) -> Result<()> {
     // Pinterest frequently changes selectors; do this via JS and dispatch input events.
     let description = description
         .map(|s| s.trim())
@@ -291,22 +312,21 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
         r#"(() => {{
   const value = {};
   const setValue = (el, v) => {{
-    el.focus();
+    try {{ el.focus(); }} catch(e) {{}}
+    const tag = (el.tagName||'').toUpperCase();
     const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
-    if (ce === 'true') {{
-      document.execCommand('selectAll', false, null);
-      document.execCommand('insertText', false, v);
+    if (ce === 'true' || tag === 'DIV' || tag === 'SPAN') {{
+      try {{ document.execCommand('selectAll', false, null); document.execCommand('insertText', false, v); }} catch(e) {{}}
     }} else {{
-      // React-safe: use native setter then execCommand for controlled inputs.
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
-        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-      if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, v);
-      else el.value = v;
-      document.execCommand('selectAll', false, null);
+      try {{
+        const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const ns = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (ns && ns.set) ns.set.call(el, v); else el.value = v;
+      }} catch(e) {{ try {{ el.value = v; }} catch(e2) {{}} }}
     }}
-    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+    try {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('blur', {{ bubbles: true }})); }} catch(e) {{}}
   }};
   // Try known IDs first.
   const byId = document.getElementById('storyboard-selector-title');
@@ -346,29 +366,22 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
         format!(
             r#"(() => {{
   const value = {};
-  const setValueContentEditable = (el, v) => {{
-    el.focus();
-    // Select all existing content then replace via execCommand so React sees the change.
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, v);
-    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-  }};
-  const setValueInput = (el, v) => {{
-    el.focus();
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-    if (nativeInputValueSetter && nativeInputValueSetter.set) nativeInputValueSetter.set.call(el, v);
-    else el.value = v;
-    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-  }};
   const setValue = (el, v) => {{
-    const tag = (el.tagName||'').toLowerCase();
+    try {{ el.focus(); }} catch(e) {{}}
+    const tag = (el.tagName||'').toUpperCase();
     const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
-    if (ce === 'true') setValueContentEditable(el, v);
-    else setValueInput(el, v);
+    if (ce === 'true' || tag === 'DIV' || tag === 'SPAN') {{
+      try {{ document.execCommand('selectAll', false, null); document.execCommand('insertText', false, v); }} catch(e) {{}}
+    }} else {{
+      try {{
+        const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const ns = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (ns && ns.set) ns.set.call(el, v); else el.value = v;
+      }} catch(e) {{ try {{ el.value = v; }} catch(e2) {{}} }}
+    }}
+    try {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('blur', {{ bubbles: true }})); }} catch(e) {{}}
   }};
   // Try known aria-label first (Pinterest uses "Describe your Pin").
   const byAria = document.querySelector('[aria-label="Describe your Pin"]');
@@ -407,21 +420,21 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
         r#"(() => {{
   const value = {};
   const setValue = (el, v) => {{
-    el.focus();
+    try {{ el.focus(); }} catch(e) {{}}
+    const tag = (el.tagName||'').toUpperCase();
     const ce = (el.getAttribute('contenteditable')||'').toLowerCase();
-    if (ce === 'true') {{
-      document.execCommand('selectAll', false, null);
-      document.execCommand('insertText', false, v);
+    if (ce === 'true' || tag === 'DIV' || tag === 'SPAN') {{
+      try {{ document.execCommand('selectAll', false, null); document.execCommand('insertText', false, v); }} catch(e) {{}}
     }} else {{
-      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
-        || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
-      if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, v);
-      else el.value = v;
-      document.execCommand('selectAll', false, null);
+      try {{
+        const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const ns = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (ns && ns.set) ns.set.call(el, v); else el.value = v;
+      }} catch(e) {{ try {{ el.value = v; }} catch(e2) {{}} }}
     }}
-    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-    el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+    try {{ el.dispatchEvent(new Event('input', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('change', {{ bubbles: true }})); }} catch(e) {{}}
+    try {{ el.dispatchEvent(new Event('blur', {{ bubbles: true }})); }} catch(e) {{}}
   }};
   // Try known IDs first.
   const byId = document.getElementById('WebsiteField');
@@ -530,7 +543,11 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
   };
 })()"#;
 
-        if let Ok(v) = page.evaluate(debug_js).await?.into_value::<serde_json::Value>() {
+        if let Ok(v) = page
+            .evaluate(debug_js)
+            .await?
+            .into_value::<serde_json::Value>()
+        {
             let debug_path = Path::new("/data/pinterest_fields_debug.json");
             if let Ok(s) = serde_json::to_string_pretty(&v) {
                 if let Err(err) = tokio::fs::write(debug_path, s).await {
@@ -546,7 +563,6 @@ async fn fill_text_fields(page: &Page, title: &str, description: Option<&str>, l
 }
 
 async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
-    // Best-effort: try to click a board selector and type the board name extracted from the URL.
     let board_name = board_url
         .trim_end_matches('/')
         .split('/')
@@ -554,59 +570,112 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
         .unwrap_or("random-thoughts")
         .replace('-', " ");
 
-    let board_js = format!(
-        r#"(() => {{
-  const needle = {};
-  const buttons = Array.from(document.querySelectorAll('button,div[role=button],a[role=button]'));
+    // Click the board picker button — retry to handle late rendering.
+    let open_js = r#"(() => {
+  const buttons = Array.from(document.querySelectorAll('button,div[role=button],a[role=button],[role=combobox]'));
   const norm = (s) => (s||'').toLowerCase();
   const open = buttons.find(b => norm(b.innerText).includes('choose a board'))
-    || buttons.find(b => norm(b.innerText).includes('board'))
-    || buttons.find(b => norm(b.getAttribute('aria-label')||'').includes('board'));
+    || buttons.find(b => norm(b.getAttribute('placeholder')||'').includes('board'))
+    || buttons.find(b => norm(b.getAttribute('aria-label')||'').includes('board'))
+    || buttons.find(b => norm(b.innerText) === 'board')
+    || buttons.find(b => norm(b.innerText).includes('board'));
   if (!open) return false;
   open.click();
   return true;
-}})()"#,
-        serde_json::to_string(&board_name).unwrap_or_else(|_| "\"\"".to_string())
-    );
+})()"#;
 
-    let opened = page
-        .evaluate(board_js)
-        .await?
-        .into_value::<bool>()
-        .unwrap_or(false);
+    let mut opened = false;
+    for _ in 0..12 {
+        opened = page
+            .evaluate(open_js)
+            .await?
+            .into_value::<bool>()
+            .unwrap_or(false);
+        if opened {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
 
     if !opened {
         warn!("could not find pinterest board picker; continuing");
-        let _ = write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
+        let _ =
+            write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
         return Ok(());
     }
 
-    tokio::time::sleep(Duration::from_millis(900)).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
 
+    // Type into search box if one appeared (React-safe native setter).
+    let search_js = format!(
+        r#"(() => {{
+  const needle = {};
+  const inputs = Array.from(document.querySelectorAll('input'));
+  const box = inputs.find(i => {{
+    const ph = (i.getAttribute('placeholder')||'').toLowerCase();
+    const aria = (i.getAttribute('aria-label')||'').toLowerCase();
+    return ph.includes('search') || aria.includes('search') || ph.includes('board') || aria.includes('board');
+  }});
+  if (!box) return false;
+  box.focus();
+  try {{
+    const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+    if (ns && ns.set) ns.set.call(box, needle); else box.value = needle;
+  }} catch(e) {{ box.value = needle; }}
+  box.dispatchEvent(new Event('input', {{ bubbles: true }}));
+  box.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  return true;
+}})()
+"#,
+        serde_json::to_string(&board_name).unwrap_or_else(|_| "\"\"".to_string())
+    );
+    let _ = page.evaluate(search_js.as_str()).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // Pick the board item — prefer role=option/menuitem/listitem, then li, then a.
     let pick_js = format!(
         r#"(() => {{
   const needle = {};
-  const norm = (s) => (s||'').toLowerCase();
-  const items = Array.from(document.querySelectorAll('[role=option],a,div'));
-  const target = items.find(el => norm(el.innerText).includes(norm(needle)));
+  const norm = (s) => (s||'').toLowerCase().trim();
+  const n = norm(needle);
+  const tryPick = (sel) => {{
+    const items = Array.from(document.querySelectorAll(sel));
+    return items.find(el => {{
+      const t = norm(el.innerText);
+      return t === n || t.startsWith(n) || t.includes(n);
+    }}) || null;
+  }};
+  const target = tryPick('[role=option],[role=menuitem],[role=listitem]')
+    || tryPick('li')
+    || tryPick('a');
   if (!target) return false;
   target.click();
   return true;
-}})()"#,
+}})()
+"#,
         serde_json::to_string(&board_name).unwrap_or_else(|_| "\"\"".to_string())
     );
 
-    let picked = page
-        .evaluate(pick_js)
-        .await?
-        .into_value::<bool>()
-        .unwrap_or(false);
+    let mut picked = false;
+    for _ in 0..6 {
+        picked = page
+            .evaluate(pick_js.as_str())
+            .await?
+            .into_value::<bool>()
+            .unwrap_or(false);
+        if picked {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
 
     if !picked {
         warn!(board = %board_name, "failed to pick board by name; continuing");
+        let _ =
+            write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
     }
 
-    tokio::time::sleep(Duration::from_millis(700)).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
     Ok(())
 }
 
@@ -657,8 +726,9 @@ async fn publish_pin(page: &Page) -> Result<()> {
   const norm = (s) => (s||'').toLowerCase().trim();
   const good = (b) => {
     const t = norm(b.innerText);
-    const a = norm(b.getAttribute('aria-label'));
-    return t === 'publish' || t === 'save' || a === 'publish' || a === 'save' || t.includes('publish') || t.includes('save');
+    const a = norm(b.getAttribute('aria-label')||'');
+    return t === 'publish' || t === 'save' || a === 'publish' || a === 'save'
+      || t.includes('publish') || t.includes('save pin') || a.includes('publish') || a.includes('save');
   };
   const target = btns.find(good) || btns.find(b => b.getAttribute('type') === 'submit');
   if (!target) return false;
@@ -666,18 +736,26 @@ async fn publish_pin(page: &Page) -> Result<()> {
   return true;
 })()"#;
 
-    let clicked = page
-        .evaluate(js)
-        .await?
-        .into_value::<bool>()
-        .unwrap_or(false);
+    let mut clicked = false;
+    for _ in 0..14 {
+        clicked = page
+            .evaluate(js)
+            .await?
+            .into_value::<bool>()
+            .unwrap_or(false);
+        if clicked {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(600)).await;
+    }
 
     if !clicked {
+        let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_debug.json")).await;
         bail!("could not find pinterest publish/save button")
     }
 
     tokio::time::sleep(Duration::from_millis(3500)).await;
-    let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_debug.json")).await;
+    let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_after_debug.json")).await;
     info!("attempted to publish pinterest pin");
     Ok(())
 }

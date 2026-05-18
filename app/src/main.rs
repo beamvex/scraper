@@ -1,4 +1,5 @@
 mod computer_queries;
+#[allow(dead_code)]
 mod facebook;
 mod ifttt;
 mod openai;
@@ -15,7 +16,6 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::computer_queries::COMPUTER_QUERIES;
-use crate::facebook::post_photo_to_page;
 use crate::ifttt::trigger_new_post;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::pinterest::maybe_post_pin_to_board;
@@ -206,18 +206,6 @@ async fn main() -> Result<()> {
                             warn!(error = %err, "failed to trigger IFTTT webhook");
                         }
 
-                        if let Err(err) = post_photo_to_page(
-                            &product_name,
-                            post_url.as_deref(),
-                            main_image_path
-                                .exists()
-                                .then_some(main_image_path.as_path()),
-                        )
-                        .await
-                        {
-                            warn!(error = %err, "failed to post to Facebook page");
-                        }
-
                         if let Err(err) =
                             maybe_tweet_new_post(&product_name, post_url.as_deref()).await
                         {
@@ -367,7 +355,11 @@ fn strip_first_tag_and_trim(s: &str) -> Option<String> {
     if inner.is_empty() { None } else { Some(inner) }
 }
 
-fn extract_between_case_insensitive(haystack: &str, start_tag: &str, end_tag: &str) -> Option<String> {
+fn extract_between_case_insensitive(
+    haystack: &str,
+    start_tag: &str,
+    end_tag: &str,
+) -> Option<String> {
     let h_lower = haystack.to_ascii_lowercase();
     let s_lower = start_tag.to_ascii_lowercase();
     let e_lower = end_tag.to_ascii_lowercase();
