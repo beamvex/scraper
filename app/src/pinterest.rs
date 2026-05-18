@@ -14,16 +14,19 @@ pub async fn maybe_post_pin_to_board(
     article_url: Option<&str>,
     image_path: Option<&Path>,
 ) -> Result<()> {
+    info!("maybe posting pin to board");
     let board_url = env::var("PINTEREST_BOARD_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "https://uk.pinterest.com/forster2474/random-thoughts/".to_string());
 
     let Some(article_url) = article_url.filter(|u| !u.trim().is_empty()) else {
+        info!("no article url provided, skipping pinterest post");
         return Ok(());
     };
 
     let Some(image_path) = image_path.filter(|p| p.exists()) else {
+        info!("no image path provided or image does not exist, skipping pinterest post");
         return Ok(());
     };
 
@@ -32,9 +35,11 @@ pub async fn maybe_post_pin_to_board(
         .ok()
         .unwrap_or_else(|| "0".to_string());
     if enabled != "1" {
+        info!("pinterest is disabled, skipping post");
         return Ok(());
     }
 
+    info!("posting pin to board");
     post_pin_to_board(
         browser,
         &board_url,
@@ -758,4 +763,28 @@ async fn publish_pin(page: &Page) -> Result<()> {
     let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_after_debug.json")).await;
     info!("attempted to publish pinterest pin");
     Ok(())
+}
+
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_maybe_post_pin_to_board() {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .init();
+
+        info!("running test!!");
+        let (browser, mut _handler) = Browser::connect("http://127.0.0.1:9222").await.unwrap();
+
+        let result = maybe_post_pin_to_board(
+            &browser,
+            "title",
+            Some("description"),
+            Some("https://example.com"),
+            Some(Path::new("/home/robert/dev/scraper/data/Amazon.com_ CyberPower AVRG900LCD Intelligent LCD UPS System_ 900VA_480W_ 12 Outlets_ AVR_ Compact _ Electronics/image_04.jpg")),
+        )
+        .await;
+        assert!(result.is_ok());
+    }
 }
