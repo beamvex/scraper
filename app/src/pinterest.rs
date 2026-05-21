@@ -89,7 +89,7 @@ async fn post_pin_to_board(
 
     upload_image(&page, image_path).await?;
     fill_text_fields(&page, title, description, link).await?;
-    choose_board(&page, board_url).await?;
+    // choose_board(&page, board_url).await?;
     publish_pin(&page).await?;
 
     Ok(())
@@ -210,7 +210,10 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
     for _ in 0..40 {
         for sel in selectors {
             if let Ok(el) = page.find_element(sel).await {
-                let files = vec![image_path.display().to_string()];
+                let abs = image_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| image_path.to_path_buf());
+                let files = vec![abs.display().to_string()];
                 let cmd = SetFileInputFilesParams::builder()
                     .files(files)
                     .backend_node_id(el.backend_node_id)
@@ -775,14 +778,20 @@ mod tests {
             .init();
 
         info!("running test!!");
-        let (browser, mut _handler) = Browser::connect("http://127.0.0.1:9222").await.unwrap();
+        let (browser, mut handler) = Browser::connect("http://127.0.0.1:9222").await.unwrap();
+        tokio::spawn(async move {
+            use futures::StreamExt;
+            while let Some(e) = handler.next().await {
+                let _ = e;
+            }
+        });
 
         let result = maybe_post_pin_to_board(
             &browser,
             "title",
             Some("description"),
             Some("https://example.com"),
-            Some(Path::new("/home/robert/dev/scraper/data/Amazon.com_ CyberPower AVRG900LCD Intelligent LCD UPS System_ 900VA_480W_ 12 Outlets_ AVR_ Compact _ Electronics/image_04.jpg")),
+            Some(Path::new("/home/robert/main-213.jpg")),
         )
         .await;
         assert!(result.is_ok());
