@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
             .await?
             .into_value::<String>()?;
         let product_folder_name = sanitize_path_component(&product_name);
-        let product_dir: PathBuf = ["/data", &product_folder_name].iter().collect();
+        let product_dir: PathBuf = ["../data", &product_folder_name].iter().collect();
 
         tokio::fs::create_dir_all(&product_dir).await?;
         info!(dir = %product_dir.display(), name = %product_name, "created product directory");
@@ -183,7 +183,7 @@ async fn main() -> Result<()> {
         .await
         {
             Ok(review_html) => {
-                let reviews_dir: PathBuf = ["/data", "reviews"].iter().collect();
+                let reviews_dir: PathBuf = ["../data", "reviews"].iter().collect();
                 tokio::fs::create_dir_all(&reviews_dir).await?;
                 let review_path = reviews_dir.join(format!("{}.html", product_folder_name));
                 tokio::fs::write(&review_path, &review_html).await?;

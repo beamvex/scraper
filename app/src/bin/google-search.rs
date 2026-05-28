@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         .await
         .context("failed to open google search page")?;
 
-    let out_dir: PathBuf = ["/data", "google-results"].iter().collect();
+    let out_dir: PathBuf = ["../data", "google-results"].iter().collect();
     tokio::fs::create_dir_all(&out_dir)
         .await
         .with_context(|| format!("failed to create {}", out_dir.display()))?;

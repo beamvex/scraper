@@ -130,7 +130,7 @@ async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
     let url = page.url().await.ok().flatten().unwrap_or_default();
 
     if let Ok(html) = page.content().await {
-        let debug_path = Path::new("/data/pinterest_upload_debug.html");
+        let debug_path = Path::new("../data/pinterest_upload_debug.html");
         if let Err(err) = tokio::fs::write(debug_path, html).await {
             warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug html");
         } else {
@@ -172,7 +172,7 @@ async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
         .await?
         .into_value::<serde_json::Value>()
     {
-        let debug_path = Path::new("/data/pinterest_upload_debug.json");
+        let debug_path = Path::new("../data/pinterest_upload_debug.json");
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             if let Err(err) = tokio::fs::write(debug_path, s).await {
                 warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug json");
@@ -236,7 +236,7 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
     warn!(%url, "could not find pinterest image upload input");
 
     if let Ok(html) = page.content().await {
-        let debug_path = Path::new("/data/pinterest_upload_debug.html");
+        let debug_path = Path::new("../data/pinterest_upload_debug.html");
         if let Err(err) = tokio::fs::write(debug_path, html).await {
             warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug html");
         } else {
@@ -285,7 +285,7 @@ async fn upload_image(page: &Page, image_path: &Path) -> Result<()> {
         .await?
         .into_value::<serde_json::Value>()
     {
-        let debug_path = Path::new("/data/pinterest_upload_debug.json");
+        let debug_path = Path::new("../data/pinterest_upload_debug.json");
         if let Ok(s) = serde_json::to_string_pretty(&v) {
             if let Err(err) = tokio::fs::write(debug_path, s).await {
                 warn!(error = %err, path = %debug_path.display(), "failed to write pinterest debug json");
@@ -556,7 +556,7 @@ async fn fill_text_fields(
             .await?
             .into_value::<serde_json::Value>()
         {
-            let debug_path = Path::new("/data/pinterest_fields_debug.json");
+            let debug_path = Path::new("../data/pinterest_fields_debug.json");
             if let Ok(s) = serde_json::to_string_pretty(&v) {
                 if let Err(err) = tokio::fs::write(debug_path, s).await {
                     warn!(error = %err, path = %debug_path.display(), "failed to write pinterest fields debug json");
@@ -607,8 +607,8 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
 
     if !opened {
         warn!("could not find pinterest board picker; continuing");
-        let _ =
-            write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
+        let _ = write_debug_snapshot(page, Path::new("../data/pinterest_choose_board_debug.json"))
+            .await;
         return Ok(());
     }
 
@@ -679,8 +679,8 @@ async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
 
     if !picked {
         warn!(board = %board_name, "failed to pick board by name; continuing");
-        let _ =
-            write_debug_snapshot(page, Path::new("/data/pinterest_choose_board_debug.json")).await;
+        let _ = write_debug_snapshot(page, Path::new("../data/pinterest_choose_board_debug.json"))
+            .await;
     }
 
     tokio::time::sleep(Duration::from_millis(800)).await;
@@ -758,12 +758,16 @@ async fn publish_pin(page: &Page) -> Result<()> {
     }
 
     if !clicked {
-        let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_debug.json")).await;
+        let _ = write_debug_snapshot(page, Path::new("../data/pinterest_publish_debug.json")).await;
         bail!("could not find pinterest publish/save button")
     }
 
     tokio::time::sleep(Duration::from_millis(3500)).await;
-    let _ = write_debug_snapshot(page, Path::new("/data/pinterest_publish_after_debug.json")).await;
+    let _ = write_debug_snapshot(
+        page,
+        Path::new("../data/pinterest_publish_after_debug.json"),
+    )
+    .await;
     info!("attempted to publish pinterest pin");
     Ok(())
 }
@@ -791,7 +795,7 @@ mod tests {
             "title",
             Some("description"),
             Some("https://example.com"),
-            Some(Path::new("/home/robert/main-213.jpg")),
+            Some(Path::new("../data/main-213.jpg")),
         )
         .await;
         assert!(result.is_ok());
