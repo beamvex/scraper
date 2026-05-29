@@ -16,13 +16,15 @@ pub(super) async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
     // Click the board picker button — retry to handle late rendering.
     let open_js = r#"(() => {
   const buttons = Array.from(document.querySelectorAll('button,div[role=button],a[role=button],[role=combobox]'));
+  console.log('[board] total buttons:', buttons.length, buttons.map(b => (b.innerText||'').trim().slice(0,40)));
   const norm = (s) => (s||'').toLowerCase();
   const open = buttons.find(b => norm(b.innerText).includes('choose a board'))
     || buttons.find(b => norm(b.getAttribute('placeholder')||'').includes('board'))
     || buttons.find(b => norm(b.getAttribute('aria-label')||'').includes('board'))
     || buttons.find(b => norm(b.innerText) === 'board')
     || buttons.find(b => norm(b.innerText).includes('board'));
-  if (!open) return false;
+  if (!open) { console.log('[board] could not find board picker button'); return false; }
+  console.log('[board] clicking board picker:', (open.innerText||'').trim(), open.getAttribute('aria-label')||'');
   open.click();
   return true;
 })()"#;
@@ -91,7 +93,8 @@ pub(super) async fn choose_board(page: &Page, board_url: &str) -> Result<()> {
   const target = tryPick('[role=option],[role=menuitem],[role=listitem]')
     || tryPick('li')
     || tryPick('a');
-  if (!target) return false;
+  if (!target) {{ console.log('[board] could not find board item for:', n); return false; }}
+  console.log('[board] clicking board item:', (target.innerText||'').trim().slice(0,60));
   target.click();
   return true;
 }})()

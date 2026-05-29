@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, bail};
 use chromiumoxide::browser::Browser;
+use chromiumoxide::cdp::browser_protocol::log::EventEntryAdded;
+use chromiumoxide::cdp::js_protocol::runtime::EventConsoleApiCalled;
 use chromiumoxide::page::Page;
+use futures::StreamExt;
 use std::env;
 use std::path::Path;
 use std::time::Duration;
@@ -85,6 +88,33 @@ async fn post_pin_to_board(
         .await
         .context("failed to open pinterest pin builder")?;
 
+    let mut log_events = page.event_listener::<EventEntryAdded>().await?;
+    let mut console_events = page.event_listener::<EventConsoleApiCalled>().await?;
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(ev) = log_events.next() => {
+                    tracing::info!(
+                        level = ?ev.entry.level,
+                        source = ?ev.entry.source,
+                        url = ?ev.entry.url,
+                        "[browser log] {}", ev.entry.text
+                    );
+                }
+                Some(ev) = console_events.next() => {
+                    let args: Vec<String> = ev.args.iter()
+                        .map(|a| a.value.as_ref()
+                            .map(|v| v.to_string())
+                            .or_else(|| a.description.clone())
+                            .unwrap_or_default())
+                        .collect();
+                    tracing::info!(r#type = ?ev.r#type, "[console] {}", args.join(" "));
+                }
+                else => break,
+            }
+        }
+    });
+
     tokio::time::sleep(Duration::from_millis(3000)).await;
 
     ui::wait_for_pin_creation_ui(&page).await?;
@@ -97,7 +127,7 @@ async fn post_pin_to_board(
 
     upload::upload_image(&page, image_path).await?;
     fields::fill_text_fields(&page, title, description, link).await?;
-    // board::choose_board(&page, board_url).await?;
+    board::choose_board(&page, board_url).await?;
     publish::publish_pin(&page).await?;
 
     Ok(())

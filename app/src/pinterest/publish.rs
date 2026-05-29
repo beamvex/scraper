@@ -7,6 +7,14 @@ use tracing::info;
 pub(super) async fn publish_pin(page: &Page) -> Result<()> {
     let js = r#"(() => {
   const btns = Array.from(document.querySelectorAll('button,div[role=button],a[role=button]'));
+  console.log('[publish] total buttons found:', btns.length);
+  console.log('[publish] buttons:', btns.map(b => ({
+    tag: b.tagName,
+    text: (b.innerText||'').trim().slice(0,80),
+    aria: b.getAttribute('aria-label')||'',
+    type: b.getAttribute('type')||'',
+    role: b.getAttribute('role')||'',
+  })));
   const norm = (s) => (s||'').toLowerCase().trim();
   const good = (b) => {
     const t = norm(b.innerText);
@@ -15,7 +23,8 @@ pub(super) async fn publish_pin(page: &Page) -> Result<()> {
       || t.includes('publish') || t.includes('save pin') || a.includes('publish') || a.includes('save');
   };
   const target = btns.find(good) || btns.find(b => b.getAttribute('type') === 'submit');
-  if (!target) return false;
+  if (!target) { console.log('[publish] no publish/save button found'); return false; }
+  console.log('[publish] clicking:', (target.innerText||'').trim(), target.getAttribute('aria-label')||'');
   target.click();
   return true;
 })()"#;
