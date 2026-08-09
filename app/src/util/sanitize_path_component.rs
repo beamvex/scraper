@@ -1,5 +1,3 @@
-use std::string::String;
-
 pub fn sanitize_path_component(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.chars() {
@@ -19,4 +17,3 @@ pub fn sanitize_path_component(input: &str) -> String {
         out.chars().take(120).collect()
     }
 }
-

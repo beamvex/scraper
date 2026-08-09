@@ -1,16 +1,11 @@
-use anyhow::{Context, Result, bail};
-use chromiumoxide::browser::Browser;
-use chromiumoxide::cdp::browser_protocol::log::EventEntryAdded;
-use chromiumoxide::cdp::js_protocol::runtime::EventConsoleApiCalled;
+use anyhow::Result;
 use chromiumoxide::page::Page;
-use futures::StreamExt;
-use std::env;
 use std::path::Path;
-use std::time::Duration;
-use tracing::info;
 
 mod board;
 mod fields;
+mod maybe_post_pin_to_board;
+mod post_pin_to_board;
 mod publish;
 mod ui;
 mod upload;
@@ -18,122 +13,9 @@ mod upload;
 #[cfg(test)]
 mod tests;
 
-pub async fn maybe_post_pin_to_board(
-    browser: &Browser,
-    title: &str,
-    description: Option<&str>,
-    article_url: Option<&str>,
-    image_path: Option<&Path>,
-) -> Result<()> {
-    info!("maybe posting pin to board");
-    let board_url = env::var("PINTEREST_BOARD_URL")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://uk.pinterest.com/forster2474/random-thoughts/".to_string());
+pub use maybe_post_pin_to_board::maybe_post_pin_to_board;
 
-    let Some(article_url) = article_url.filter(|u| !u.trim().is_empty()) else {
-        info!("no article url provided, skipping pinterest post");
-        return Ok(());
-    };
-
-    let Some(image_path) = image_path.filter(|p| p.exists()) else {
-        info!("no image path provided or image does not exist, skipping pinterest post");
-        return Ok(());
-    };
-
-    // Optional gating.
-    let enabled = env::var("PINTEREST_ENABLED")
-        .ok()
-        .unwrap_or_else(|| "0".to_string());
-    if enabled != "1" {
-        info!("pinterest is disabled, skipping post");
-        return Ok(());
-    }
-
-    info!("posting pin to board");
-    post_pin_to_board(
-        browser,
-        &board_url,
-        title,
-        description,
-        article_url,
-        image_path,
-    )
-    .await
-}
-
-async fn post_pin_to_board(
-    browser: &Browser,
-    board_url: &str,
-    title: &str,
-    description: Option<&str>,
-    link: &str,
-    image_path: &Path,
-) -> Result<()> {
-    // Pinterest UI is volatile; we try a best-effort flow via the Pin Builder.
-    // Assumption: you are already logged-in in the Chrome profile used by the running container.
-
-    info!(%board_url, "opening pinterest board");
-    let _board_page = browser
-        .new_page(board_url)
-        .await
-        .context("failed to open pinterest board")?;
-
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-
-    let pin_builder_url = "https://www.pinterest.com/pin-builder/";
-    info!(%pin_builder_url, "opening pinterest pin builder");
-    let page = browser
-        .new_page(pin_builder_url)
-        .await
-        .context("failed to open pinterest pin builder")?;
-
-    let mut log_events = page.event_listener::<EventEntryAdded>().await?;
-    let mut console_events = page.event_listener::<EventConsoleApiCalled>().await?;
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Some(ev) = log_events.next() => {
-                    tracing::info!(
-                        level = ?ev.entry.level,
-                        source = ?ev.entry.source,
-                        url = ?ev.entry.url,
-                        "[browser log] {}", ev.entry.text
-                    );
-                }
-                Some(ev) = console_events.next() => {
-                    let args: Vec<String> = ev.args.iter()
-                        .map(|a| a.value.as_ref()
-                            .map(|v| v.to_string())
-                            .or_else(|| a.description.clone())
-                            .unwrap_or_default())
-                        .collect();
-                    tracing::info!(r#type = ?ev.r#type, "[console] {}", args.join(" "));
-                }
-                else => break,
-            }
-        }
-    });
-
-    tokio::time::sleep(Duration::from_millis(3000)).await;
-
-    ui::wait_for_pin_creation_ui(&page).await?;
-
-    if ui::is_login_interstitial(&page).await.unwrap_or(false) {
-        bail!(
-            "pinterest appears to require login in the current browser session (redirected to login)"
-        );
-    }
-
-    upload::upload_image(&page, image_path).await?;
-    fields::fill_text_fields(&page, title, description, link).await?;
-    board::choose_board(&page, board_url).await?;
-    publish::publish_pin(&page).await?;
-
-    Ok(())
-}
-
-async fn write_debug_snapshot(page: &Page, path: &Path) -> Result<()> {
+pub(super) async fn write_debug_snapshot(page: &Page, path: &Path) -> Result<()> {
     let debug_js = r#"(() => {
   const text = (document.documentElement && document.documentElement.innerText) ? document.documentElement.innerText : '';
   const sample = (sel) => Array.from(document.querySelectorAll(sel)).slice(0, 60).map(el => ({

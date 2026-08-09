@@ -1,11 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use chromiumoxide::page::Page;
 use std::path::Path;
 use std::time::Duration;
 use tracing::warn;
 
-pub(super) async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
-    // Pin creation tool is a heavy SPA. If it doesn't render, selectors will all fail.
+pub async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
     for _ in 0..360 {
         let counts: (u64, u64, u64, u64, u64) = page
             .evaluate(
@@ -22,12 +21,10 @@ pub(super) async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
             .into_value::<(u64, u64, u64, u64, u64)>()
             .unwrap_or((0, 0, 0, 0, 0));
 
-        // Best signal: the image upload control exists.
         if counts.2 >= 1 {
             return Ok(());
         }
 
-        // Otherwise: the SPA is likely ready if we see a reasonable number of interactive elements.
         let formish = counts.0.saturating_add(counts.1);
         if counts.3 >= 6 || (counts.3 >= 4 && formish >= 3) {
             return Ok(());
@@ -92,19 +89,4 @@ pub(super) async fn wait_for_pin_creation_ui(page: &Page) -> Result<()> {
     }
 
     bail!("pinterest pin creation UI did not render (url: {})", url)
-}
-
-pub(super) async fn is_login_interstitial(page: &Page) -> Result<bool> {
-    let url = page.url().await.ok().flatten().unwrap_or_default();
-    if url.contains("/login") {
-        return Ok(true);
-    }
-
-    let html: String = page
-        .evaluate("document.documentElement.innerText")
-        .await?
-        .into_value::<String>()
-        .unwrap_or_default();
-
-    Ok(html.to_lowercase().contains("log in") && html.to_lowercase().contains("password"))
 }

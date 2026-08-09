@@ -8,7 +8,7 @@ mod util;
 mod wordpress_com;
 mod x;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use rand::seq::IndexedRandom;
@@ -19,12 +19,14 @@ use crate::computer_queries::COMPUTER_QUERIES;
 use crate::ifttt::trigger_new_post;
 use crate::openai::{generate_review_article_html, load_chatgpt_key};
 use crate::pinterest::maybe_post_pin_to_board;
-use crate::util::sanitize_path_component;
+use crate::util::{
+    extract_article_title, extract_first_paragraph_text, resolve_amazon_url,
+    sanitize_path_component,
+};
 use crate::wordpress_com::publish_review_html_to_wordpress_com;
-use crate::x::{default_token_path, post_tweet_with_retry};
+use crate::x::maybe_tweet_new_post;
 
 const DEBUG: bool = false;
-const AMAZON_BASE: &str = "https://www.amazon.com";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -246,137 +248,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn maybe_tweet_new_post(title: &str, post_url: Option<&str>) -> Result<()> {
-    let Some(url) = post_url.filter(|u| !u.trim().is_empty()) else {
-        return Ok(());
-    };
-
-    // Only tweet 1/10 of the time.
-    if rand::random::<u8>() % 10 != 0 {
-        return Ok(());
-    }
-
-    // Default: enabled if X_CLIENT_ID is set.
-    let client_id = match std::env::var("X_CLIENT_ID") {
-        Ok(v) if !v.trim().is_empty() => v,
-        _ => return Ok(()),
-    };
-
-    let client_secret = std::env::var("X_CLIENT_SECRET")
-        .ok()
-        .filter(|s| !s.trim().is_empty());
-
-    let token_path = match std::env::var("X_TOKEN_PATH") {
-        Ok(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
-        _ => default_token_path().context("HOME not set; cannot infer X token path")?,
-    };
-
-    let tweet_text = build_tweet_text(title, url);
-    let tweet_id = post_tweet_with_retry(
-        &token_path,
-        &client_id,
-        client_secret.as_deref(),
-        &tweet_text,
-    )
-    .await?;
-
-    info!(%tweet_id, "posted X tweet");
-    Ok(())
-}
-
-fn build_tweet_text(title: &str, url: &str) -> String {
-    // Keep it simple: the link will generate a card/preview (including the featured image).
-    // Be conservative about length; truncate title if needed.
-    let mut t = title.trim().replace('\n', " ");
-    while t.contains("  ") {
-        t = t.replace("  ", " ");
-    }
-
-    // Leave headroom for the URL and whitespace.
-    if t.chars().count() > 220 {
-        t = t.chars().take(217).collect::<String>();
-        t.push_str("...");
-    }
-
-    format!("{}\n{}", t, url)
-}
-
-fn resolve_amazon_url(href: &str) -> String {
-    if href.starts_with("http://") || href.starts_with("https://") {
-        href.to_string()
-    } else if href.starts_with('/') {
-        format!("{}{}", AMAZON_BASE, href)
-    } else {
-        format!("{}/{}", AMAZON_BASE, href)
-    }
-}
-
-fn extract_first_paragraph_text(html: &str) -> Option<String> {
-    let start = html.to_lowercase().find("<p")?;
-    let slice = &html[start..];
-    let gt = slice.find('>')?;
-    let after_open = &slice[(gt + 1)..];
-    let end = after_open.to_lowercase().find("</p>")?;
-    let inner = after_open[..end].trim();
-    if inner.is_empty() {
-        return None;
-    }
-    // Strip tags very roughly.
-    let mut out = String::with_capacity(inner.len());
-    let mut in_tag = false;
-    for ch in inner.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn extract_article_title(html: &str) -> Option<String> {
-    // Best-effort: <h1>..</h1> then <title>..</title>.
-    extract_between_case_insensitive(html, "<h1", "</h1>")
-        .and_then(|s| strip_first_tag_and_trim(&s))
-        .or_else(|| {
-            extract_between_case_insensitive(html, "<title", "</title>")
-                .and_then(|s| strip_first_tag_and_trim(&s))
-        })
-}
-
-fn strip_first_tag_and_trim(s: &str) -> Option<String> {
-    let gt = s.find('>')?;
-    let inner = s[(gt + 1)..].trim();
-    let inner = html_decode_minimal(inner);
-    if inner.is_empty() { None } else { Some(inner) }
-}
-
-fn extract_between_case_insensitive(
-    haystack: &str,
-    start_tag: &str,
-    end_tag: &str,
-) -> Option<String> {
-    let h_lower = haystack.to_ascii_lowercase();
-    let s_lower = start_tag.to_ascii_lowercase();
-    let e_lower = end_tag.to_ascii_lowercase();
-
-    let start_idx = h_lower.find(&s_lower)?;
-    let after_start = &haystack[start_idx..];
-
-    let end_lower_idx = h_lower[start_idx..].find(&e_lower)?;
-    let end_idx = start_idx + end_lower_idx;
-
-    Some(after_start[..(end_idx - start_idx)].to_string())
-}
-
-fn html_decode_minimal(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
 }
