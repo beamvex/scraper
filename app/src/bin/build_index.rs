@@ -47,9 +47,14 @@ fn build_index_html(links: &[(String, String)]) -> String {
     let items = links
         .iter()
         .map(|(href, text)| {
+            let encoded = href
+                .split('/')
+                .map(|s| urlencoding::encode(s).into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
             format!(
                 "<li><a href=\"{}\">{}</a></li>",
-                href,
+                encoded,
                 html_escape(text)
             )
         })
