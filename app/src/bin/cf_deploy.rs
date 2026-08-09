@@ -17,20 +17,20 @@ async fn main() -> Result<()> {
 
     let files = collect_files(&data_dir)?;
     let manifest = build_manifest(&files);
+    let archive = build_tar(&data_dir, &files)?;
     let url = format!(
         "https://api.cloudflare.com/client/v4/accounts/{}/pages/projects/{}/deployments",
         account_id, project
     );
-    let mut form = reqwest::multipart::Form::new()
+    let manifest_part = reqwest::multipart::Part::text(manifest)
+        .mime_str("application/json")?;
+    let file_part = reqwest::multipart::Part::bytes(archive)
+        .file_name("site.tar")
+        .mime_str("application/x-tar")?;
+    let form = reqwest::multipart::Form::new()
         .text("branch", branch)
-        .text("manifest", manifest);
-    for (path, data) in files {
-        let mime = content_type(&path);
-        let part = reqwest::multipart::Part::bytes(data)
-            .file_name(path)
-            .mime_str(mime)?;
-        form = form.part("file", part);
-    }
+        .part("manifest", manifest_part)
+        .part("file", file_part);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -80,27 +80,22 @@ fn build_manifest(files: &[(String, Vec<u8>)]) -> String {
     Value::Object(map).to_string()
 }
 
+fn build_tar(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut buf);
+        for (rel, _) in files {
+            let full = dir.join(rel);
+            builder
+                .append_path_with_name(&full, rel)
+                .with_context(|| format!("failed to tar {}", full.display()))?;
+        }
+        builder.finish()?;
+    }
+    Ok(buf)
+}
+
 fn sha256_hex(data: &[u8]) -> String {
     let hash = Sha256::digest(data);
     hash.iter().map(|b| format!("{:02x}", b)).collect::<String>()
-}
-
-fn content_type(path: &str) -> &'static str {
-    if path.ends_with(".html") {
-        "text/html"
-    } else if path.ends_with(".css") {
-        "text/css"
-    } else if path.ends_with(".js") {
-        "application/javascript"
-    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
-        "image/jpeg"
-    } else if path.ends_with(".png") {
-        "image/png"
-    } else if path.ends_with(".svg") {
-        "image/svg+xml"
-    } else if path.ends_with(".ico") {
-        "image/x-icon"
-    } else {
-        "application/octet-stream"
-    }
 }
