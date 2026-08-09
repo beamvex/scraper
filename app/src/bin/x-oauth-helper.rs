@@ -19,6 +19,45 @@ use tracing::{info, warn};
 
 static CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
+const X_INDEX_HTML: &str = r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>X OAuth Helper</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 960px; }
+      input[type=text], input[type=password] { width: 100%; padding: 10px; margin: 6px 0 14px; box-sizing: border-box; }
+      textarea { width: 100%; height: 220px; }
+      .row { margin-bottom: 10px; }
+      .hint { color: #666; font-size: 12px; margin-top: -10px; margin-bottom: 12px; }
+      .btn { padding: 10px 14px; font-weight: 600; }
+      code { background: #f4f4f4; padding: 2px 5px; }
+    </style>
+  </head>
+  <body>
+    <h1>X OAuth Helper</h1>
+    <form method="post" action="/start">
+      <div class="row"><label>Client ID</label>
+        <input name="client_id" type="text" placeholder="your client id" required /></div>
+      <div class="row"><label>Client Secret (optional)</label>
+        <input name="client_secret" type="password" placeholder="only needed for confidential clients" />
+        <div class="hint">If you leave this blank, we attempt PKCE-only token exchange (public client style).</div></div>
+      <div class="row"><label>Redirect URI</label>
+        <input name="redirect_uri" type="text" value="http://127.0.0.1:8085/callback" required />
+        <div class="hint">This must exactly match the redirect URI configured in your X developer app.</div></div>
+      <div class="row"><label>Scopes</label>
+        <input name="scope" type="text" value="tweet.read tweet.write users.read offline.access" required /></div>
+      <div class="row"><label>
+        <input type="checkbox" name="use_client_secret" value="1" />
+        Use client secret (confidential client)</label></div>
+      <button class="btn" type="submit">Authorize on X</button>
+    </form>
+    <h2>Last token response</h2>
+    <textarea readonly>{CONTENT}</textarea>
+    <p>Direct link: <a href="/token">/token</a></p>
+  </body>
+</html>"#;
+
 #[derive(Clone, Default)]
 struct AppState {
     inner: Arc<Mutex<Inner>>,
@@ -64,100 +103,25 @@ async fn main() -> Result<()> {
     if let Ok(home) = std::env::var("HOME") {
         let _ = dotenvy::from_filename(format!("{}/.env", home));
     }
-
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let state = AppState::default();
-
     let app = Router::new()
         .route("/", get(index))
         .route("/start", post(start))
         .route("/callback", get(callback))
         .route("/token", get(show_token))
         .with_state(state);
-
     let addr = "127.0.0.1:8085";
     info!(%addr, "x oauth helper listening");
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .context("failed to bind")?;
-
+    let listener = tokio::net::TcpListener::bind(addr).await.context("failed to bind")?;
     axum::serve(listener, app).await.context("server error")?;
     Ok(())
 }
 
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
     let inner = state.inner.lock().unwrap();
-    let token_snip = inner
-        .token_json
-        .as_deref()
-        .unwrap_or("(no token response yet)");
-
-    let html = format!(
-        r#"<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>X OAuth Helper</title>
-    <style>
-      body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 960px; }}
-      input[type=text], input[type=password] {{ width: 100%; padding: 10px; margin: 6px 0 14px; box-sizing: border-box; }}
-      textarea {{ width: 100%; height: 220px; }}
-      .row {{ margin-bottom: 10px; }}
-      .hint {{ color: #666; font-size: 12px; margin-top: -10px; margin-bottom: 12px; }}
-      .btn {{ padding: 10px 14px; font-weight: 600; }}
-      code {{ background: #f4f4f4; padding: 2px 5px; }}
-    </style>
-  </head>
-  <body>
-    <h1>X OAuth Helper</h1>
-
-    <form method="post" action="/start">
-      <div class="row">
-        <label>Client ID</label>
-        <input name="client_id" type="text" placeholder="your client id" required />
-      </div>
-
-      <div class="row">
-        <label>Client Secret (optional)</label>
-        <input name="client_secret" type="password" placeholder="only needed for confidential clients" />
-        <div class="hint">If you leave this blank, we attempt PKCE-only token exchange (public client style).</div>
-      </div>
-
-      <div class="row">
-        <label>Redirect URI</label>
-        <input name="redirect_uri" type="text" value="http://127.0.0.1:8085/callback" required />
-        <div class="hint">This must exactly match the redirect URI configured in your X developer app.</div>
-      </div>
-
-      <div class="row">
-        <label>Scopes</label>
-        <input name="scope" type="text" value="tweet.read tweet.write users.read offline.access" required />
-      </div>
-
-      <div class="row">
-        <label>
-          <input type="checkbox" name="use_client_secret" value="1" />
-          Use client secret (confidential client)
-        </label>
-      </div>
-
-      <button class="btn" type="submit">Authorize on X</button>
-    </form>
-
-    <h2>Last token response</h2>
-    <textarea readonly>{}</textarea>
-
-    <p>Direct link: <a href="/token">/token</a></p>
-  </body>
-</html>"#,
-        escape_html(token_snip)
-    );
-
-    Html(html)
+    let snip = inner.token_json.as_deref().unwrap_or("(no token response yet)");
+    Html(X_INDEX_HTML.replace("{CONTENT}", &escape_html(snip)))
 }
 
 async fn start(State(state): State<AppState>, Form(form): Form<StartForm>) -> impl IntoResponse {
@@ -167,60 +131,34 @@ async fn start(State(state): State<AppState>, Form(form): Form<StartForm>) -> im
     }
 }
 
-async fn start_inner(state: AppState, form: StartForm) -> Result<axum::response::Response> {
-    if form.client_id.trim().is_empty() {
-        bail!("client_id is required");
-    }
-
-    let redirect_uri = form.redirect_uri.trim().to_string();
-    if redirect_uri.is_empty() {
-        bail!("redirect_uri is required");
-    }
-
-    let scope = form.scope.trim().to_string();
-    if scope.is_empty() {
-        bail!("scope is required");
-    }
-
-    let client_secret = if form.use_client_secret.is_some() {
+fn extract_client_secret(form: &StartForm) -> Result<Option<String>> {
+    if form.use_client_secret.is_some() {
         let s = form.client_secret.trim().to_string();
-        if s.is_empty() {
-            bail!("use_client_secret checked but client_secret empty");
-        }
-        Some(s)
-    } else {
-        None
-    };
+        if s.is_empty() { bail!("use_client_secret checked but client_secret empty"); }
+        Ok(Some(s))
+    } else { Ok(None) }
+}
 
+async fn start_inner(state: AppState, form: StartForm) -> Result<axum::response::Response> {
+    if form.client_id.trim().is_empty() { bail!("client_id is required"); }
+    let redirect_uri = form.redirect_uri.trim().to_string();
+    if redirect_uri.is_empty() { bail!("redirect_uri is required"); }
+    let scope = form.scope.trim().to_string();
+    if scope.is_empty() { bail!("scope is required"); }
+    let client_secret = extract_client_secret(&form)?;
     let (code_verifier, code_challenge) = gen_pkce();
-
-    let oauth_state = gen_state();
-
     let cfg = Config {
-        client_id: form.client_id.trim().to_string(),
-        client_secret,
-        redirect_uri: redirect_uri.clone(),
-        scope: scope.clone(),
-        state: oauth_state.clone(),
-        code_verifier,
-        code_challenge,
+        client_id: form.client_id.trim().to_string(), client_secret,
+        redirect_uri: redirect_uri.clone(), scope: scope.clone(),
+        state: gen_state(), code_verifier, code_challenge,
     };
-
-    {
-        let mut inner = state.inner.lock().unwrap();
-        inner.cfg = Some(cfg.clone());
-        inner.token_json = None;
-    }
-
+    { let mut inner = state.inner.lock().unwrap(); inner.cfg = Some(cfg.clone()); inner.token_json = None; }
     let authorize_url = format!(
         "https://twitter.com/i/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
-        urlencoding::encode(&cfg.client_id),
-        urlencoding::encode(&cfg.redirect_uri),
-        urlencoding::encode(&cfg.scope),
-        urlencoding::encode(&cfg.state),
+        urlencoding::encode(&cfg.client_id), urlencoding::encode(&cfg.redirect_uri),
+        urlencoding::encode(&cfg.scope), urlencoding::encode(&cfg.state),
         urlencoding::encode(&cfg.code_challenge),
     );
-
     Ok(Redirect::temporary(&authorize_url).into_response())
 }
 
@@ -239,40 +177,16 @@ async fn callback_inner(
     params: CallbackParams,
 ) -> Result<axum::response::Response> {
     if let Some(err) = params.error {
-        let msg = format!(
-            "oauth error: {}{}",
-            err,
-            params
-                .error_description
-                .as_ref()
-                .map(|d| format!(" ({})", d))
-                .unwrap_or_default()
-        );
+        let msg = format!("oauth error: {}{}", err,
+            params.error_description.as_ref().map(|d| format!(" ({})", d)).unwrap_or_default());
         warn!(%msg, "oauth callback error");
         return Ok((StatusCode::BAD_REQUEST, msg).into_response());
     }
-
     let code = params.code.context("missing code")?;
-
-    let cfg = {
-        let inner = state.inner.lock().unwrap();
-        inner
-            .cfg
-            .clone()
-            .context("no config in memory; start at /")?
-    };
-
-    if params.state.as_deref() != Some(&cfg.state) {
-        bail!("state mismatch");
-    }
-
+    let cfg = { let inner = state.inner.lock().unwrap(); inner.cfg.clone().context("no config in memory; start at /")? };
+    if params.state.as_deref() != Some(&cfg.state) { bail!("state mismatch"); }
     let token_json = exchange_code_for_token(&cfg, &code).await?;
-
-    {
-        let mut inner = state.inner.lock().unwrap();
-        inner.token_json = Some(token_json);
-    }
-
+    { let mut inner = state.inner.lock().unwrap(); inner.token_json = Some(token_json); }
     Ok(Redirect::to("/").into_response())
 }
 
@@ -295,37 +209,22 @@ async fn show_token(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn exchange_code_for_token(cfg: &Config, code: &str) -> Result<String> {
     let url = "https://api.twitter.com/2/oauth2/token";
-
     let mut body: HashMap<&str, String> = HashMap::new();
     body.insert("grant_type", "authorization_code".to_string());
     body.insert("client_id", cfg.client_id.clone());
     body.insert("code", code.to_string());
     body.insert("redirect_uri", cfg.redirect_uri.clone());
     body.insert("code_verifier", cfg.code_verifier.clone());
-
     let form_body = serde_urlencoded::to_string(&body).context("failed to encode form body")?;
-
-    let mut req = CLIENT
-        .post(url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(form_body);
-
+    let mut req = CLIENT.post(url).header("Content-Type", "application/x-www-form-urlencoded").body(form_body);
     if let Some(secret) = &cfg.client_secret {
-        // Use HTTP Basic auth for confidential clients.
-        let basic = base64::engine::general_purpose::STANDARD
-            .encode(format!("{}:{}", cfg.client_id, secret));
+        let basic = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", cfg.client_id, secret));
         req = req.header("Authorization", format!("Basic {}", basic));
     }
-
     let resp = req.send().await.context("token request failed")?;
-
     let status = resp.status();
     let text = resp.text().await.context("failed to read token response")?;
-
-    if !status.is_success() {
-        bail!("token exchange failed: HTTP {}: {}", status, text);
-    }
-
+    if !status.is_success() { bail!("token exchange failed: HTTP {}: {}", status, text); }
     Ok(text)
 }
 

@@ -9,19 +9,9 @@ pub async fn trigger_new_post(title: &str, url: Option<&str>) -> Result<()> {
         _ => return Ok(()),
     };
     let event = env::var("IFTTT_WEBHOOK_EVENT").unwrap_or_else(|_| "new_post".to_string());
-
-    let endpoint = format!(
-        "https://maker.ifttt.com/trigger/{}/json/with/key/{}",
-        event, key
-    );
-
-    let body = json!({
-        "value1": title,
-        "value2": url.unwrap_or(""),
-    });
-
-    let client = Client::new();
-    client
+    let endpoint = format!("https://maker.ifttt.com/trigger/{}/json/with/key/{}", event, key);
+    let body = json!({ "value1": title, "value2": url.unwrap_or("") });
+    Client::new()
         .post(endpoint)
         .json(&body)
         .send()
@@ -29,6 +19,5 @@ pub async fn trigger_new_post(title: &str, url: Option<&str>) -> Result<()> {
         .context("failed to send IFTTT webhook")?
         .error_for_status()
         .context("IFTTT webhook returned error status")?;
-
     Ok(())
 }

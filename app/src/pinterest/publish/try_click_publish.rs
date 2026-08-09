@@ -1,18 +1,12 @@
-use anyhow::{Result, bail};
 use chromiumoxide::page::Page;
-use std::path::Path;
 use std::time::Duration;
-use tracing::info;
 
-pub(super) async fn publish_pin(page: &Page) -> Result<()> {
-    let js = r#"(() => {
+const CLICK_PUBLISH_JS: &str = r#"(() => {
   const btns = Array.from(document.querySelectorAll('button,div[role=button],a[role=button]'));
   console.log('[publish] total buttons found:', btns.length);
   console.log('[publish] buttons:', btns.map(b => ({
-    tag: b.tagName,
-    text: (b.innerText||'').trim().slice(0,80),
-    aria: b.getAttribute('aria-label')||'',
-    type: b.getAttribute('type')||'',
+    tag: b.tagName, text: (b.innerText||'').trim().slice(0,80),
+    aria: b.getAttribute('aria-label')||'', type: b.getAttribute('type')||'',
     role: b.getAttribute('role')||'',
   })));
   const norm = (s) => (s||'').toLowerCase().trim();
@@ -29,30 +23,11 @@ pub(super) async fn publish_pin(page: &Page) -> Result<()> {
   return true;
 })()"#;
 
-    let mut clicked = false;
+pub(super) async fn try_click_publish(page: &Page) -> anyhow::Result<bool> {
     for _ in 0..14 {
-        clicked = page
-            .evaluate(js)
-            .await?
-            .into_value::<bool>()
-            .unwrap_or(false);
-        if clicked {
-            break;
-        }
+        let clicked = page.evaluate(CLICK_PUBLISH_JS).await?.into_value::<bool>().unwrap_or(false);
+        if clicked { return Ok(true); }
         tokio::time::sleep(Duration::from_millis(600)).await;
     }
-
-    if !clicked {
-        let _ = super::write_debug_snapshot(page, Path::new("../data/pinterest_publish_debug.json")).await;
-        bail!("could not find pinterest publish/save button")
-    }
-
-    tokio::time::sleep(Duration::from_millis(3500)).await;
-    let _ = super::write_debug_snapshot(
-        page,
-        Path::new("../data/pinterest_publish_after_debug.json"),
-    )
-    .await;
-    info!("attempted to publish pinterest pin");
-    Ok(())
+    Ok(false)
 }
