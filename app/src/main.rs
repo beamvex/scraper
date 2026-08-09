@@ -1,12 +1,17 @@
 mod computer_queries;
 #[allow(dead_code)]
 mod facebook;
+#[allow(unused)]
 mod ifttt;
+#[allow(unused)]
 mod openai;
+#[allow(unused)]
 mod pinterest;
 mod run;
 mod util;
+#[allow(unused)]
 mod wordpress_com;
+#[allow(unused)]
 mod x;
 
 use anyhow::Result;
