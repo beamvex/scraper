@@ -19,7 +19,13 @@ async fn main() -> Result<()> {
     let md = fs::read_to_string(md_path).with_context(|| format!("failed to read {}", md_path))?;
     let md_path = PathBuf::from(md_path);
     let images = collect_images(&md_path);
-    let prompt = build_prompt(&md, &images);
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let template_path = manifest_dir.join("product_details_template.html");
+    let template = fs::read_to_string(&template_path)
+        .with_context(|| format!("failed to read template {}", template_path.display()))?;
+    let prompt = build_prompt(&md, &images, &template);
     let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set")?;
     let html = generate_html(&api_key, &prompt).await?;
     let html = polish_html(html, &images);
@@ -42,7 +48,7 @@ fn collect_images(md_path: &Path) -> Vec<String> {
     names
 }
 
-fn build_prompt(md: &str, images: &[String]) -> String {
+fn build_prompt(md: &str, images: &[String], template: &str) -> String {
     let md = if md.len() > MAX_CHARS { &md[..MAX_CHARS] } else { md };
     let image_list = images
         .iter()
@@ -50,24 +56,17 @@ fn build_prompt(md: &str, images: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are an SEO and consumer-product review expert.\n\n\
-        Given the following Markdown product description, identify:\n\n\
-        1. Problems this product solves (return as a JSON array of strings under key `problems_solved`)\n\
-        2. Long-tail keywords people would search for to find this product (return as a JSON array of strings under key `long_tail_keywords`)\n\
-        3. A detailed product review article optimized for those long-tail keywords, written as a complete, valid HTML document (return as a string under key `html`)\n\n\
-        Requirements for `html`:\n\
-        - Start with `<!DOCTYPE html>` and a full `<html>` document with `<head>` and `<body>`.\n\
-        - In the `<head>`, include exactly this Bootstrap CSS link: {2}\n\
-        - Just before the closing `</body>`, include exactly this Bootstrap JS script: {3}\n\
-        - Write a detailed, in-depth review: at least 8 sections with `<h2>` headings; each section should have 4-6 paragraphs; each paragraph should have 4-6 sentences.\n\
-        - Include a dedicated 'Customer Reviews' or 'What Buyers Are Saying' section near the bottom with 4-5 positive review comments. Each comment should include a reviewer name and a short quote.\n\
-        - Use all of the product images listed below. Reference them with `src=\"images/FILENAME\"` (e.g., `src=\"images/image_001.jpg\"`).\n\
-        - Include the problems and keywords naturally throughout the article.\n\
-        - Use semantic HTML: `<article>`, `<h1>`, `<h2>`, `<p>`, `<ul>`, `<img>`, `<figure>`, `<blockquote>`.\n\
-        - Do not output markdown or code fences.\n\n\
+        "You are an expert at writing product detail pages.\n\n\
+        Fill in every `{{{{...}}}}` placeholder in the following HTML template using only the product information from the Markdown below.\n\
+        - Use the first or most representative product image for `{{{{IMAGE_URL}}}}` (use `images/FILENAME` for local images).\n\
+        - If a placeholder has no matching value, replace it with an empty string.\n\
+        - `{{{{BUY_URL}}}}` should be the product link if one can be inferred from the Markdown; otherwise leave empty.\n\
+        - `{{{{YEAR}}}}` should be the current year.\n\
+        - Return the complete filled HTML document inside a JSON object with a single `html` string key. Do not output markdown or code fences.\n\n\
+        Template:\n{2}\n\n\
         Product images:\n{0}\n\n\
         Markdown product description:\n{1}",
-        image_list, md, BOOTSTRAP_CSS, BOOTSTRAP_JS
+        image_list, md, template
     )
 }
 

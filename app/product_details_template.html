@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}} | My Favourite Products</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <div class="container">
+      <a class="navbar-brand" href="/index.html">My Favourite Products</a>
+    </div>
+  </nav>
+
+  <div class="container my-5">
+    <div class="row g-5">
+      <div class="col-lg-6">
+        <img src="{{IMAGE_URL}}" class="img-fluid rounded shadow" alt="{{TITLE}}">
+      </div>
+      <div class="col-lg-6">
+        <h1 class="display-5 fw-bold">{{TITLE}}</h1>
+        <p class="text-muted">{{BRAND}}</p>
+        <h2 class="text-primary">{{PRICE}}</h2>
+        <div class="d-grid gap-2 d-md-flex justify-content-md-start my-4">
+          <a class="btn btn-primary btn-lg" href="{{BUY_URL}}">Buy on Amazon</a>
+          <a class="btn btn-outline-secondary btn-lg" href="/index.html">Back to Index</a>
+        </div>
+        <p class="lead">{{SHORT_DESCRIPTION}}</p>
+      </div>
+    </div>
+
+    <hr class="my-5">
+
+    <div class="row">
+      <div class="col-lg-8">
+        <h3>Description</h3>
+        <p>{{DESCRIPTION}}</p>
+
+        <h3 class="mt-4">Key Features</h3>
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item">{{FEATURE_1}}</li>
+          <li class="list-group-item">{{FEATURE_2}}</li>
+          <li class="list-group-item">{{FEATURE_3}}</li>
+          <li class="list-group-item">{{FEATURE_4}}</li>
+        </ul>
+      </div>
+      <div class="col-lg-4">
+        <h3>Specifications</h3>
+        <table class="table table-bordered">
+          <tbody>
+            <tr>
+              <th scope="row">Brand</th>
+              <td>{{BRAND}}</td>
+            </tr>
+            <tr>
+              <th scope="row">Model</th>
+              <td>{{MODEL}}</td>
+            </tr>
+            <tr>
+              <th scope="row">Color</th>
+              <td>{{COLOR}}</td>
+            </tr>
+            <tr>
+              <th scope="row">Dimensions</th>
+              <td>{{DIMENSIONS}}</td>
+            </tr>
+            <tr>
+              <th scope="row">Weight</th>
+              <td>{{WEIGHT}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <hr class="my-5">
+
+    <div class="row">
+      <div class="col-12">
+        <h3>Customer Reviews</h3>
+        <div class="card my-3">
+          <div class="card-body">
+            <h5 class="card-title">{{REVIEW_TITLE}}</h5>
+            <p class="card-text">{{REVIEW_BODY}}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="bg-light text-center py-4 mt-5">
+    <div class="container">
+      <p class="mb-0 text-muted">&copy; {{YEAR}} My Favourite Products</p>
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
