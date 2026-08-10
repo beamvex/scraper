@@ -2,7 +2,7 @@
 name = "scraper"
 version = "0.1.0"
 edition = "2024"
-default-run = "scraper"
+default-run = "pipeline"
 
 [dependencies]
 anyhow = "1"
