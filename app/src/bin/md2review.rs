@@ -62,7 +62,10 @@ fn build_prompt(md: &str, images: &[String], template: &str) -> String {
         - If a placeholder has no matching value, replace it with an empty string.\n\
         - `{{{{BUY_URL}}}}` should be the product link if one can be inferred from the Markdown; otherwise leave empty.\n\
         - `{{{{YEAR}}}}` should be the current year.\n\
-        - Return the complete filled HTML document inside a JSON object with a single `html` string key. Do not output markdown or code fences.\n\n\
+        - Return the complete filled HTML document inside a JSON object with a single `html` string key. Do not output markdown or code fences.\n\
+        - Target a 3-minute reading time. Expand the description and features to be thorough and useful on their own.\n\
+        - The Customer Reviews section must include every positive review (4 or 5 stars) from the Markdown. Do not summarize, combine, or omit any. Each review gets its own `<div class=\"card my-3\">` block with its original title and full original body text.\n\
+        - Use `{{{{REVIEW_TITLE}}}}` and `{{{{REVIEW_BODY}}}}` for the first positive review, then add the remaining positive reviews as extra cards directly after it.\n\n\
         Template:\n{2}\n\n\
         Product images:\n{0}\n\n\
         Markdown product description:\n{1}",

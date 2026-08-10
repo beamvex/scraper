@@ -77,6 +77,125 @@ fn image_block(names: &[String]) -> String {
     format!("## Product Images\n\n{}", names.iter().map(|n| format!("![product image](images/{})", n)).collect::<Vec<_>>().join("\n"))
 }
 
+fn extract_product_text(html: &str) -> Option<String> {
+    let doc = Html::parse_document(html);
+    let title = doc
+        .select(&Selector::parse("#productTitle").ok()?)
+        .next()
+        .map(|e| e.text().collect::<String>().trim().to_string())
+        .unwrap_or_default();
+
+    let price = doc
+        .select(&Selector::parse(".a-price .a-offscreen, #priceblock_ourprice, #priceblock_dealprice, .a-price-whole").ok()?)
+        .filter_map(|e| {
+            let t = e.text().collect::<String>().trim().to_string();
+            if t.starts_with('$') || t.starts_with('£') || t.starts_with('€') || t.starts_with("GBP") {
+                Some(t)
+            } else {
+                None
+            }
+        })
+        .next()
+        .unwrap_or_default();
+
+    let bullets: Vec<String> = doc
+        .select(&Selector::parse("#feature-bullets li").ok()?)
+        .map(|e| e.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty() && !s.to_lowercase().contains("see more") && !s.to_lowercase().contains("make it"))
+        .collect();
+
+    let desc: Vec<String> = doc
+        .select(&Selector::parse("#productDescription p, #aplus p").ok()?)
+        .map(|e| e.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut reviews = Vec::new();
+    let review_sel = Selector::parse("div[data-hook='review']").ok()?;
+    let star_sel = Selector::parse("[data-hook='review-star-rating'] .a-icon-alt, [data-hook='review-star-rating']").ok()?;
+    let title_sel = Selector::parse("[data-hook='reviewTitle'] span, [data-hook='reviewTitle']").ok()?;
+    let body_sel = Selector::parse("[data-hook='reviewText'] span, [data-hook='reviewText']").ok()?;
+
+    for review in doc.select(&review_sel) {
+        let star = review.select(&star_sel)
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+        let title = review.select(&title_sel)
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+        let body = review.select(&body_sel)
+            .next()
+            .map(|e| e.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+        if body.is_empty() {
+            continue;
+        }
+        let body = body
+            .replace("Brief content visible, double tap to read full content.", "")
+            .replace("Full content visible, double tap to read brief content.", "")
+            .replace("Read more", "")
+            .replace("Read less", "")
+            .replace("  ", " ")
+            .trim()
+            .to_string();
+        if body.is_empty() {
+            continue;
+        }
+        let star_num = star
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
+        if star_num >= 4 {
+            reviews.push(format!("**{}** | {}: {}", star, title, truncate_review(&body, 280)));
+        }
+    }
+
+fn truncate_review(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut s = text.chars().take(max).collect::<String>();
+    for (i, c) in s.char_indices().rev() {
+        if c == '.' || c == '!' || c == '?' {
+            s.truncate(i + 1);
+            return s;
+        }
+    }
+    format!("{}...", s.trim_end())
+}
+
+    let mut out = format!("# {}\n\n", title);
+    if !price.is_empty() {
+        out.push_str(&format!("**Price:** {}\n\n", price));
+    }
+    if !desc.is_empty() {
+        out.push_str(&desc.join("\n\n"));
+        out.push_str("\n\n");
+    }
+    if !bullets.is_empty() {
+        out.push_str("## Features\n\n");
+        for b in &bullets {
+            out.push_str(&format!("- {}\n", b));
+        }
+        out.push_str("\n");
+    }
+    if !reviews.is_empty() {
+        out.push_str("## Customer Reviews\n\n");
+        for r in reviews {
+            out.push_str(&format!("- {}\n", r));
+        }
+        out.push_str("\n");
+    }
+    if title.is_empty() && desc.is_empty() && bullets.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let html_path = args.first().context("usage: html2md <input.html> [output.md]")?;
@@ -88,8 +207,10 @@ fn main() -> Result<()> {
     let img_dir = md_path.parent().unwrap_or(Path::new(".")).join("images");
     let urls = product_image_urls(&html);
     let images = if urls.is_empty() { String::new() } else { image_block(&download_images(&img_dir, &urls)?) };
-    let html = clean_html(&html);
-    let text = html2text::from_read(html.as_bytes(), 80).context("html2text conversion failed")?;
+    let text = extract_product_text(&html).unwrap_or_else(|| {
+        let html = clean_html(&html);
+        html2text::from_read(html.as_bytes(), 80).unwrap_or_default()
+    });
     let text = format!("{}\n\n{}", clean_md(&text), images);
     fs::write(&md_path, text).with_context(|| format!("failed to write {}", md_path.display()))?;
     println!("wrote {}", md_path.display());
