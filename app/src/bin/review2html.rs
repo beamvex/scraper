@@ -41,6 +41,30 @@ fn collect_images(md_path: &Path) -> Vec<String> {
     names
 }
 
+fn wrap_h2_in_cards(html: &str) -> String {
+    let h2_re = Regex::new(r"(?s)<h2[^>]*>.*?</h2>").unwrap();
+    let mut matches = h2_re.find_iter(html).peekable();
+    let mut out = String::new();
+    let mut last = 0;
+    while let Some(m) = matches.next() {
+        out.push_str(&html[last..m.start()]);
+        let h2 = m.as_str().replace("<h2>", "<h2 class=\"card-title\">");
+        let end = if let Some(next) = matches.peek() {
+            next.start()
+        } else {
+            html.len()
+        };
+        let body = &html[m.end()..end];
+        out.push_str("<div class=\"card my-3\"><div class=\"card-body\">");
+        out.push_str(&h2);
+        out.push_str(body);
+        out.push_str("</div></div>");
+        last = end;
+    }
+    out.push_str(&html[last..]);
+    out
+}
+
 fn render(md: &str, images: &[String], template: &str) -> Result<String> {
     let title = md
         .lines()
@@ -65,6 +89,7 @@ fn render(md: &str, images: &[String], template: &str) -> Result<String> {
     let mut content = String::new();
     let parser = Parser::new(&body_md);
     html::push_html(&mut content, parser);
+    content = wrap_h2_in_cards(&content);
 
     let mut out = template.to_string();
     replace_all(&mut out, "{{TITLE}}", &title);
