@@ -19,9 +19,12 @@ async fn main() -> Result<()> {
     let images = collect_images(&md_path);
     let prompt = build_prompt(&md, &images);
     let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set")?;
-    let review = generate_md(&api_key, &prompt).await?;
+    let (review, keywords) = generate_review(&api_key, &prompt).await?;
+    let keywords_path = md_path.with_extension("keywords.txt");
     fs::write(&out_path, review).with_context(|| format!("failed to write {}", out_path))?;
+    fs::write(&keywords_path, keywords).with_context(|| format!("failed to write {}", keywords_path.display()))?;
     println!("wrote {}", out_path);
+    println!("wrote {}", keywords_path.display());
     Ok(())
 }
 
@@ -56,12 +59,12 @@ fn build_prompt(md: &str, images: &[String]) -> String {
         - Use the product images listed.\n\n\
         Product images:\n{0}\n\n\
         Markdown product description:\n{1}\n\n\
-        - Return the complete Markdown review inside a JSON object with a single `md` string key. Do not output HTML or code fences.",
+        - Return a JSON object with two keys: `md` (the Markdown review) and `keywords` (a comma-separated string of the long-tail keywords you came up with). Do not output HTML or code fences.",
         image_list, md
     )
 }
 
-async fn generate_md(api_key: &str, prompt: &str) -> Result<String> {
+async fn generate_review(api_key: &str, prompt: &str) -> Result<(String, String)> {
     let body = json!({
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
@@ -90,10 +93,16 @@ async fn generate_md(api_key: &str, prompt: &str) -> Result<String> {
         .context("OpenAI response missing content")?;
     let parsed: Value =
         serde_json::from_str(content).context("OpenAI content is not valid JSON")?;
-    parsed
+    let md = parsed
         .get("md")
         .and_then(|h| h.as_str())
         .map(String::from)
-        .context("OpenAI JSON missing md field")
+        .context("OpenAI JSON missing md field")?;
+    let keywords = parsed
+        .get("keywords")
+        .and_then(|h| h.as_str())
+        .map(String::from)
+        .unwrap_or_default();
+    Ok((md, keywords))
 }
 

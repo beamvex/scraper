@@ -32,9 +32,11 @@ fn main() -> Result<()> {
     if let Some((_, page)) = pages.first() {
         let md = page.with_file_name("output.md");
         let review = page.with_file_name("output.review.md");
+        let html = page.with_file_name("index.html");
         println!("processing {}", page.display());
         run_html2md(page, &md)?;
         run_md2review(&md, &review)?;
+        run_review2html(&review, &html)?;
     }
 
     Ok(())
@@ -66,6 +68,16 @@ fn run_html2md(input: &Path, output: &Path) -> Result<()> {
 fn run_md2review(input: &Path, output: &Path) -> Result<()> {
     run_cargo_bin(
         "md2review",
+        &[
+            input.to_string_lossy().into_owned(),
+            output.to_string_lossy().into_owned(),
+        ],
+    )
+}
+
+fn run_review2html(input: &Path, output: &Path) -> Result<()> {
+    run_cargo_bin(
+        "review2html",
         &[
             input.to_string_lossy().into_owned(),
             output.to_string_lossy().into_owned(),
