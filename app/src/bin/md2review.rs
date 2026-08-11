@@ -5,31 +5,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const MAX_CHARS: usize = 80_000;
-const BOOTSTRAP_CSS: &str = r#"<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">"#;
-const BOOTSTRAP_JS: &str = r#"<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>"#;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let args: Vec<String> = env::args().skip(1).collect();
-    let md_path = args.first().context("usage: md2review <input.md> [output.html]")?;
+    let md_path = args.first().context("usage: md2review <input.md> [output.md]")?;
     let out_path = args.get(1).cloned().unwrap_or_else(|| {
-        PathBuf::from(md_path).with_extension("html").to_string_lossy().into_owned()
+        PathBuf::from(md_path).with_extension("review.md").to_string_lossy().into_owned()
     });
     let md = fs::read_to_string(md_path).with_context(|| format!("failed to read {}", md_path))?;
     let md_path = PathBuf::from(md_path);
     let images = collect_images(&md_path);
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let template_path = manifest_dir.join("product_details_template.html");
-    let template = fs::read_to_string(&template_path)
-        .with_context(|| format!("failed to read template {}", template_path.display()))?;
-    let prompt = build_prompt(&md, &images, &template);
+    let prompt = build_prompt(&md, &images);
     let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY not set")?;
-    let html = generate_html(&api_key, &prompt).await?;
-    let html = polish_html(html, &images);
-    fs::write(&out_path, html).with_context(|| format!("failed to write {}", out_path))?;
+    let review = generate_md(&api_key, &prompt).await?;
+    fs::write(&out_path, review).with_context(|| format!("failed to write {}", out_path))?;
     println!("wrote {}", out_path);
     Ok(())
 }
@@ -48,7 +39,7 @@ fn collect_images(md_path: &Path) -> Vec<String> {
     names
 }
 
-fn build_prompt(md: &str, images: &[String], template: &str) -> String {
+fn build_prompt(md: &str, images: &[String]) -> String {
     let md = if md.len() > MAX_CHARS { &md[..MAX_CHARS] } else { md };
     let image_list = images
         .iter()
@@ -56,27 +47,21 @@ fn build_prompt(md: &str, images: &[String], template: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "You are an expert at writing product detail pages.\n\n\
-        Fill in every `{{{{...}}}}` placeholder in the following HTML template using only the product information from the Markdown below.\n\
-        - Use the first or most representative product image for `{{{{IMAGE_URL}}}}` (use `images/FILENAME` for local images).\n\
-        - If a placeholder has no matching value, replace it with an empty string.\n\
-        - `{{{{BUY_URL}}}}` should be the product link if one can be inferred from the Markdown; otherwise leave empty.\n\
-        - `{{{{YEAR}}}}` should be the current year.\n\
-        - Return the complete filled HTML document inside a JSON object with a single `html` string key. Do not output markdown or code fences.\n\
-        - Target a 20-minute reading time for the product review. Expand the description and features to be thorough and useful on their own.\n\
-        - The Customer Reviews section must include every positive review (4 or 5 stars) from the Markdown. Do not summarize, combine, or omit any. Each review gets its own `<div class=\"card my-3\">` block with its original title and full original body text.\n\
-        - Use `{{{{REVIEW_TITLE}}}}` and `{{{{REVIEW_BODY}}}}` for the first positive review, then add the remaining positive reviews as extra cards directly after it.\n\n\
-        - You must think of problems this product solves \n\
-        - you must come up with a long tail keyword the customer would be using to find this product\n\
-        - you must target this long tail keyword in the content\n\
-        Template:\n{2}\n\n\
+        "You are an expert product review and SEO writer.\n\n\
+        Write a comprehensive product review in Markdown based on the Markdown product description below.\n\
+        - Think of 3-5 problems this product solves and cover them in the review.\n\
+        - Come up with a long-tail keyword a customer would search for to find this product, and target it naturally throughout the review.\n\
+        - Aim for a 20-minute reading time. Expand the description, features, and analysis to be thorough and useful.\n\
+        - Include every positive customer review (4 or 5 stars) from the Markdown. Do not summarize, combine, or omit any. Each review should appear as a Markdown quote with its original title and full original body text.\n\
+        - Use the product images listed.\n\n\
         Product images:\n{0}\n\n\
-        Markdown product description:\n{1}",
-        image_list, md, template
+        Markdown product description:\n{1}\n\n\
+        - Return the complete Markdown review inside a JSON object with a single `md` string key. Do not output HTML or code fences.",
+        image_list, md
     )
 }
 
-async fn generate_html(api_key: &str, prompt: &str) -> Result<String> {
+async fn generate_md(api_key: &str, prompt: &str) -> Result<String> {
     let body = json!({
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": prompt}],
@@ -106,34 +91,9 @@ async fn generate_html(api_key: &str, prompt: &str) -> Result<String> {
     let parsed: Value =
         serde_json::from_str(content).context("OpenAI content is not valid JSON")?;
     parsed
-        .get("html")
+        .get("md")
         .and_then(|h| h.as_str())
         .map(String::from)
-        .context("OpenAI JSON missing html field")
+        .context("OpenAI JSON missing md field")
 }
 
-fn polish_html(mut html: String, images: &[String]) -> String {
-    if !html.contains("bootstrap.min.css") {
-        if let Some(idx) = html.find("</head>") {
-            html.insert_str(idx, &format!("\n{}\n", BOOTSTRAP_CSS));
-        } else if let Some(idx) = html.find("<head>") {
-            html.insert_str(idx + "<head>".len(), &format!("\n{}\n", BOOTSTRAP_CSS));
-        }
-    }
-    if !html.contains("bootstrap.bundle.min.js") {
-        if let Some(idx) = html.find("</body>") {
-            html.insert_str(idx, &format!("\n{}\n", BOOTSTRAP_JS));
-        }
-    }
-    if !html.contains("<img") && !images.is_empty() {
-        let gallery = images
-            .iter()
-            .map(|i| format!("<figure><img src=\"images/{}\" alt=\"product image\" /></figure>", i))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if let Some(idx) = html.find("</body>") {
-            html.insert_str(idx, &format!("\n{}\n", gallery));
-        }
-    }
-    html
-}

@@ -31,13 +31,12 @@ fn main() -> Result<()> {
 
     if let Some((_, page)) = pages.first() {
         let md = page.with_file_name("output.md");
-        let review = page.with_file_name("index.html");
+        let review = page.with_file_name("output.review.md");
         println!("processing {}", page.display());
         run_html2md(page, &md)?;
         run_md2review(&md, &review)?;
     }
 
-    run_build_index(&data_dir)?;
     Ok(())
 }
 
@@ -72,10 +71,6 @@ fn run_md2review(input: &Path, output: &Path) -> Result<()> {
             output.to_string_lossy().into_owned(),
         ],
     )
-}
-
-fn run_build_index(data_dir: &Path) -> Result<()> {
-    run_cargo_bin("build_index", &[data_dir.to_string_lossy().into_owned()])
 }
 
 fn run_cargo_bin(name: &str, args: &[String]) -> Result<()> {
