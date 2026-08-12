@@ -39,6 +39,9 @@ fn main() -> Result<()> {
         run_review2html(&review, &html)?;
     }
 
+    run_build_index(&data_dir)?;
+    run_cf_deploy(&data_dir)?;
+
     Ok(())
 }
 
@@ -83,6 +86,14 @@ fn run_review2html(input: &Path, output: &Path) -> Result<()> {
             output.to_string_lossy().into_owned(),
         ],
     )
+}
+
+fn run_build_index(data_dir: &Path) -> Result<()> {
+    run_cargo_bin("build_index", &[data_dir.to_string_lossy().into_owned()])
+}
+
+fn run_cf_deploy(data_dir: &Path) -> Result<()> {
+    run_cargo_bin("cf_deploy", &[data_dir.to_string_lossy().into_owned()])
 }
 
 fn run_cargo_bin(name: &str, args: &[String]) -> Result<()> {
