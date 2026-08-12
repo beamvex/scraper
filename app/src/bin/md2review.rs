@@ -56,6 +56,8 @@ fn build_prompt(md: &str, images: &[String]) -> String {
         - Come up with a long-tail keyword a customer would search for to find this product, and target it naturally throughout the review.\n\
         - Aim for a 20-minute reading time. Expand the description, features, and analysis to be thorough and useful.\n\
         - Include every positive customer review (4 or 5 stars) from the Markdown. Do not summarize, combine, or omit any. Each review should appear as a Markdown quote with its original title and full original body text.\n\
+        - Do not include the price anywhere in the review.\n\
+        - Do not include images in the conclusion section; images may be used elsewhere in the review.\n\
         - Use the product images listed.\n\n\
         Product images:\n{0}\n\n\
         Markdown product description:\n{1}\n\n\
