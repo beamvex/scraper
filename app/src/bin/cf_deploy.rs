@@ -4,6 +4,8 @@ use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,8 +47,79 @@ async fn main() -> Result<()> {
     if !status.is_success() {
         bail!("Cloudflare upload failed ({}): {}", status, body);
     }
-    println!("{}", body);
+    let parsed: Value =
+        serde_json::from_str(&body).context("failed to parse upload response")?;
+    let deployment_id = parsed
+        .get("result")
+        .and_then(|r| r.get("id"))
+        .and_then(|v| v.as_str())
+        .context("missing deployment id in response")?;
+    println!("deployment {} queued", deployment_id);
+    let final_result =
+        poll_deployment(&client, &account_id, &project, &api_token, deployment_id).await?;
+    println!("{}", final_result);
     Ok(())
+}
+
+async fn poll_deployment(
+    client: &reqwest::Client,
+    account_id: &str,
+    project: &str,
+    api_token: &str,
+    deployment_id: &str,
+) -> Result<String> {
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/pages/projects/{}/deployments/{}",
+        account_id, project, deployment_id
+    );
+    for i in 0..120 {
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", api_token))
+            .send()
+            .await
+            .context("failed to call Cloudflare deployment status API")?;
+        let status = resp.status();
+        let body = resp.text().await.context("failed to read status response body")?;
+        if !status.is_success() {
+            bail!("deployment status check failed ({}): {}", status, body);
+        }
+        let v: Value =
+            serde_json::from_str(&body).context("failed to parse deployment status")?;
+        let result = v.get("result").context("missing result in status response")?;
+        if let (Some(stage_name), Some(stage_status)) = (
+            result.get("latest_stage").and_then(|s| s.get("name")).and_then(|n| n.as_str()),
+            result.get("latest_stage").and_then(|s| s.get("status")).and_then(|s| s.as_str()),
+        ) {
+            let is_active =
+                result.get("status").and_then(|s| s.as_str()) == Some("active");
+            let has_aliases = result
+                .get("aliases")
+                .and_then(|a| a.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+            println!(
+                "[{}] stage: {} = {}, active: {}, aliases: {}",
+                i, stage_name, stage_status, is_active, has_aliases
+            );
+            if stage_name == "deploy" && stage_status == "success" && (is_active || has_aliases) {
+                return Ok(serde_json::to_string_pretty(result).unwrap_or(body));
+            }
+            if stage_status == "failure" {
+                bail!("deployment failed at stage {}: {}", stage_name, body);
+            }
+        }
+        if let Some(stages) = result.get("stages").and_then(|s| s.as_array()) {
+            for stage in stages {
+                if stage.get("status").and_then(|s| s.as_str()) == Some("failure") {
+                    let name = stage.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                    bail!("deployment failed at stage {}: {}", name, body);
+                }
+            }
+        }
+        sleep(Duration::from_secs(5)).await;
+    }
+    bail!("deployment did not complete within 10 minutes")
 }
 
 fn collect_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
