@@ -61,7 +61,7 @@ fn build_index_html(links: &[(String, String)]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n<title>Product Index</title>\n</head>\n<body>\n<h1>Product Index</h1>\n<ul>\n{}\n</ul>\n</body>\n</html>",
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<!-- Google tag (gtag.js) -->\n<script async src=\"https://www.googletagmanager.com/gtag/js?id=G-QQMJVW98SP\"></script>\n<script>\n  window.dataLayer = window.dataLayer || [];\n  function gtag(){{dataLayer.push(arguments);}}\n  gtag('js', new Date());\n\n  gtag('config', 'G-QQMJVW98SP');\n</script>\n<meta charset=\"UTF-8\">\n<title>Product Index</title>\n</head>\n<body>\n<h1>Product Index</h1>\n<ul>\n{}\n</ul>\n</body>\n</html>",
         items
     )
 }
